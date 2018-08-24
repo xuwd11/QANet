@@ -123,3 +123,4 @@ bash.exe.stackdump
 debug.ipynb
 
 #dataset
+data/
