@@ -90,7 +90,7 @@ def padded(token_batch, batch_pad=0):
         All are same length - batch_pad if batch_pad!=0, otherwise the maximum length in token_batch
     """
     maxlen = max(map(lambda x: len(x), token_batch)) if batch_pad == 0 else batch_pad
-    return map(lambda token_list: token_list + [PAD_ID] * (maxlen - len(token_list)), token_batch)
+    return list(map(lambda token_list: token_list + [PAD_ID] * (maxlen - len(token_list)), token_batch))
 
 
 def refill_batches(batches, word2id, context_file, qn_file, ans_file, batch_size, context_len, question_len, discard_long):

@@ -218,7 +218,7 @@ class QAModel(object):
         input_feed[self.qn_mask] = batch.qn_mask
         input_feed[self.ans_span] = batch.ans_span
         input_feed[self.keep_prob] = 1.0 - self.FLAGS.dropout # apply dropout
-
+        
         # output_feed contains the things we want to fetch.
         output_feed = [self.updates, self.summaries, self.loss, self.global_step, self.param_norm, self.gradient_norm]
 
@@ -462,7 +462,7 @@ class QAModel(object):
 
             # Loop over batches
             for batch in get_batch_generator(self.word2id, train_context_path, train_qn_path, train_ans_path, self.FLAGS.batch_size, context_len=self.FLAGS.context_len, question_len=self.FLAGS.question_len, discard_long=True):
-
+                
                 # Run training iteration
                 iter_tic = time.time()
                 loss, global_step, param_norm, grad_norm = self.run_train_iter(session, batch, summary_writer)

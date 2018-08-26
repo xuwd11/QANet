@@ -104,8 +104,8 @@ def main(unused_argv):
         raise Exception("There is a problem with how you entered flags: %s" % unused_argv)
 
     # Check for Python 2
-    if sys.version_info[0] != 2:
-        raise Exception("ERROR: You must use Python 2 but you are running Python %i" % sys.version_info[0])
+    #if sys.version_info[0] != 2:
+        #raise Exception("ERROR: You must use Python 2 but you are running Python %i" % sys.version_info[0])
 
     # Print out Tensorflow version
     print("This code was developed and tested on TensorFlow 1.4.1. Your TensorFlow version: %s" % tf.__version__)
@@ -150,7 +150,7 @@ def main(unused_argv):
 
         # Save a record of flags as a .json file in train_dir
         with open(os.path.join(FLAGS.train_dir, "flags.json"), 'w') as fout:
-            json.dump(FLAGS.__flags, fout)
+            json.dump(str(FLAGS.__flags), fout)
 
         # Make bestmodel dir if necessary
         if not os.path.exists(bestmodel_dir):
