@@ -23,7 +23,7 @@ import time
 import re
 
 import numpy as np
-from six.moves import xrange
+#from six.moves import xrange
 from vocab import PAD_ID, UNK_ID
 
 
@@ -106,7 +106,7 @@ def refill_batches(batches, word2id, context_file, qn_file, ans_file, batch_size
       discard_long: If True, discard any examples that are longer than context_len or question_len.
         If False, truncate those exmaples instead.
     """
-    print "Refilling batches..."
+    print("Refilling batches...")
     tic = time.time()
     examples = [] # list of (qn_ids, context_ids, ans_span, ans_tokens) triples
     context_line, qn_line, ans_line = context_file.readline(), qn_file.readline(), ans_file.readline() # read the next line from each
@@ -124,7 +124,7 @@ def refill_batches(batches, word2id, context_file, qn_file, ans_file, batch_size
         # get ans_tokens from ans_span
         assert len(ans_span) == 2
         if ans_span[1] < ans_span[0]:
-            print "Found an ill-formed gold span: start=%i end=%i" % (ans_span[0], ans_span[1])
+            print("Found an ill-formed gold span: start=%i end=%i" % (ans_span[0], ans_span[1]))
             continue
         ans_tokens = context_tokens[ans_span[0] : ans_span[1]+1] # list of strings
 
@@ -156,7 +156,7 @@ def refill_batches(batches, word2id, context_file, qn_file, ans_file, batch_size
     examples = sorted(examples, key=lambda e: len(e[2]))
 
     # Make into batches and append to the list batches
-    for batch_start in xrange(0, len(examples), batch_size):
+    for batch_start in range(0, len(examples), batch_size):
 
         # Note: each of these is a list length batch_size of lists of ints (except on last iter when it might be less than batch_size)
         context_ids_batch, context_tokens_batch, qn_ids_batch, qn_tokens_batch, ans_span_batch, ans_tokens_batch = zip(*examples[batch_start:batch_start+batch_size])
@@ -167,7 +167,7 @@ def refill_batches(batches, word2id, context_file, qn_file, ans_file, batch_size
     random.shuffle(batches)
 
     toc = time.time()
-    print "Refilling batches took %.2f seconds" % (toc-tic)
+    print("Refilling batches took %.2f seconds" % (toc-tic))
     return
 
 

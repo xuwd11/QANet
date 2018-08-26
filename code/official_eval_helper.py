@@ -22,7 +22,7 @@ from __future__ import division
 import os
 from tqdm import tqdm
 import numpy as np
-from six.moves import xrange
+#from six.moves import xrange
 from nltk.tokenize.moses import MosesDetokenizer
 
 from preprocessing.squad_preprocess import data_from_json, tokenize
@@ -86,7 +86,7 @@ def refill_batches(batches, word2id, qn_uuid_data, context_token_data, qn_token_
         qn_uuid, context_tokens, qn_tokens = readnext(qn_uuid_data), readnext(context_token_data), readnext(qn_token_data)
 
     # Make into batches
-    for batch_start in xrange(0, len(examples), batch_size):
+    for batch_start in range(0, len(examples), batch_size):
         uuids_batch, context_tokens_batch, context_ids_batch, qn_ids_batch = zip(*examples[batch_start:batch_start + batch_size])
 
         batches.append((uuids_batch, context_tokens_batch, context_ids_batch, qn_ids_batch))
