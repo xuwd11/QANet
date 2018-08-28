@@ -36,19 +36,19 @@ MAIN_DIR = os.path.relpath(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 DEFAULT_DATA_DIR = os.path.join(MAIN_DIR, "data") # relative path of data dir
 EXPERIMENTS_DIR = os.path.join(MAIN_DIR, "experiments") # relative path of experiments dir
 
-
 # High-level options
-tf.app.flags.DEFINE_integer("gpu", 0, "Which GPU to use, if you have multiple.")
+tf.app.flags.DEFINE_integer("gpu", 1, "Which GPU to use, if you have multiple.")
 tf.app.flags.DEFINE_string("mode", "train", "Available modes: train / show_examples / official_eval")
 tf.app.flags.DEFINE_string("experiment_name", "", "Unique name for your experiment. This will create a directory by this name in the experiments/ directory, which will hold all data related to this experiment")
 tf.app.flags.DEFINE_integer("num_epochs", 0, "Number of epochs to train. 0 means train indefinitely")
+tf.app.flags.DEFINE_string("model", "rnn_lstm", "Model to use")
 
 # Hyperparameters
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 5.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use")
-tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of the hidden states")
+tf.app.flags.DEFINE_integer("hidden_size", 128, "Size of the hidden states")
 tf.app.flags.DEFINE_integer("context_len", 600, "The maximum context length of your model")
 tf.app.flags.DEFINE_integer("question_len", 30, "The maximum question length of your model")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained word vectors. This needs to be one of the available GloVe dimensions: 50/100/200/300")
@@ -114,7 +114,17 @@ def main(unused_argv):
     if not FLAGS.experiment_name and not FLAGS.train_dir and FLAGS.mode != "official_eval":
         raise Exception("You need to specify either --experiment_name or --train_dir")
     FLAGS.train_dir = FLAGS.train_dir or os.path.join(EXPERIMENTS_DIR, FLAGS.experiment_name)
+    if not FLAGS.train_dir in FLAGS.json_out_path:
+        FLAGS.json_out_path = os.path.join(FLAGS.train_dir, FLAGS.json_out_path)
 
+    # Load saved flags
+    if FLAGS.mode != 'train':
+        with open(os.path.join(FLAGS.train_dir, "flags.json"), 'r') as fin:
+            saved_flags = json.load(fin)
+            for name, value in saved_flags.items():
+                if name != 'mode' and value != '':
+                    FLAGS.__flags[name].value = value
+    
     # Initialize bestmodel directory
     bestmodel_dir = os.path.join(FLAGS.train_dir, "best_checkpoint")
 
@@ -166,6 +176,7 @@ def main(unused_argv):
 
 
     elif FLAGS.mode == "show_examples":
+            
         with tf.Session(config=config) as sess:
 
             # Load best model
