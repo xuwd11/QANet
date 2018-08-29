@@ -30,7 +30,7 @@ from tensorflow.python.ops import embedding_ops
 from evaluate import exact_match_score, f1_score
 from data_batcher import get_batch_generator
 from pretty_print import print_example
-from modules import RNNEncoder, SimpleSoftmaxLayer, BasicAttn, BiDAFAttn, initializer_relu
+from modules import RNNEncoder, SimpleSoftmaxLayer, BasicAttn, BiDAFAttn, initializer_relu, max_product_span
 
 logging.basicConfig(level=logging.INFO)
 
@@ -315,9 +315,13 @@ class QAModel(object):
         start_dist, end_dist = self.get_prob_dists(session, batch)
 
         # Take argmax to get start_pos and end_post, both shape (batch_size)
-        start_pos = np.argmax(start_dist, axis=1)
-        end_pos = np.argmax(end_dist, axis=1)
-
+        #start_pos = np.argmax(start_dist, axis=1)
+        #end_pos = np.argmax(end_dist, axis=1)
+        
+        # Find the answer span with maximum probability
+        start_dist, end_dist = np.array(start_dist), np.array(end_dist)
+        start_pos, end_pos = max_product_span(start_dist, end_dist)
+        
         return start_pos, end_pos
 
 

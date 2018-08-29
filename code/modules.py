@@ -14,6 +14,7 @@
 
 """This file contains some basic model components"""
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops.rnn_cell import DropoutWrapper
 from tensorflow.python.ops import variable_scope as vs
@@ -22,6 +23,7 @@ from tensorflow.python.ops import rnn_cell
 
 initializer_relu = lambda: tf.contrib.layers.variance_scaling_initializer(factor=2.0, mode='FAN_IN',
                                                                           uniform=False, dtype=tf.float32)
+
 
 class RNNEncoder(object):
     """
@@ -180,6 +182,24 @@ class BasicAttn(object):
 
             return attn_dist, output
 
+        
+class BiDAFAttn(object):
+    '''Module for BiDAF attention cell from https://arxiv.org/abs/1611.01603
+    '''
+    def __init__(self, keep_prob=1):
+        self.keep_prob = keep_prob
+        
+    def build_graph(self, c, c_mask, q, q_mask, scope='BiDAFAttn'):
+        with tf.variable_scope(scope):
+            S = trilinear_similarity(c, q)
+            _, alpha = masked_softmax(S, tf.expand_dims(q_mask, 1), 2)
+            a = tf.matmul(alpha, q)
+            m = tf.reduce_max(S, axis=2)
+            _, beta = masked_softmax(m, c_mask, 1)
+            c_attn = tf.matmul(tf.expand_dims(beta, 1), c)
+            output = tf.concat([c, a, tf.multiply(c, a), tf.multiply(c, c_attn)], -1)
+        return output
+
 
 def masked_softmax(logits, mask, dim):
     """
@@ -222,20 +242,30 @@ def trilinear_similarity(c, q, scope='trilinear_similarity'):
         S = tf.add(S, bias)
     return S
 
-class BiDAFAttn(object):
-    '''Module for BiDAF attention cell from https://arxiv.org/abs/1611.01603
+
+def max_product_span(start_dist, end_dist):
     '''
-    def __init__(self, keep_prob=1):
-        self.keep_prob = keep_prob
-        
-    def build_graph(self, c, c_mask, q, q_mask, scope='BiDAFAttn'):
-        with tf.variable_scope(scope):
-            S = trilinear_similarity(c, q)
-            _, alpha = masked_softmax(S, tf.expand_dims(q_mask, 1), 2)
-            a = tf.matmul(alpha, q)
-            m = tf.reduce_max(S, axis=2)
-            _, beta = masked_softmax(m, c_mask, 1)
-            c_attn = tf.matmul(tf.expand_dims(beta, 1), c)
-            output = tf.concat([c, a, tf.multiply(c, a), tf.multiply(c, c_attn)], -1)
-        return output
+    Find the answer span with maximum probability
+    '''
+    batch_size, input_len = start_dist.shape
+    i = np.zeros(batch_size, dtype=np.int32)
+    start_pos = np.zeros(batch_size, dtype=np.int32)
+    end_pos = np.zeros(batch_size, dtype=np.int32)
+    start_argmax = np.zeros(batch_size, dtype=np.int32)
+    max_start_prob = np.zeros(batch_size, dtype=np.float32)
+    max_product = np.zeros(batch_size, dtype=np.float32)
     
+    while np.any(i < input_len):
+        start_prob = start_dist[np.arange(batch_size), i]
+        start_argmax = np.where(start_prob > max_start_prob, i, start_argmax)
+        max_start_prob = np.where(start_prob > max_start_prob, start_prob, max_start_prob)
+        
+        end_prob = end_dist[np.arange(batch_size), i]
+        new_product = max_start_prob * end_prob
+        start_pos = np.where(new_product > max_product, start_argmax, start_pos)
+        end_pos = np.where(new_product > max_product, i, end_pos)
+        max_product = np.where(new_product > max_product, new_product, max_product)
+        
+        i += 1
+        
+    return start_pos, end_pos
