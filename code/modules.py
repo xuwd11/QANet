@@ -36,15 +36,15 @@ class RNNEncoder(object):
     This code uses a bidirectional GRU, but you could experiment with other types of RNN.
     """
 
-    def __init__(self, hidden_size, keep_prob, model):
+    def __init__(self, hidden_size, keep_prob, cell_type):
         """
         Inputs:
           hidden_size: int. Hidden size of the RNN
           keep_prob: Tensor containing a single scalar that is the keep probability (for dropout)
         """
-        if model == 'rnn_lstm':
+        if cell_type == 'rnn_lstm':
             cell = rnn_cell.LSTMCell
-        elif model == 'rnn_gru':
+        elif cell_type == 'rnn_gru':
             cell = rnn_cell.GRUCell
         self.hidden_size = hidden_size
         self.keep_prob = keep_prob
@@ -203,3 +203,38 @@ def masked_softmax(logits, mask, dim):
     masked_logits = tf.add(logits, exp_mask) # where there's padding, set logits to -large
     prob_dist = tf.nn.softmax(masked_logits, dim)
     return masked_logits, prob_dist
+
+def trilinear_similarity(c, q):
+    '''
+    Calculate trilinear similarity matrix from https://arxiv.org/abs/1611.01603
+    '''
+    c_shape, q_shape = c.get_shape().as_list(), q.get_shape().as_list()
+    c_len, q_len, h = c_shape[1], q_shape[1], c_shape[2]
+    with tf.variable_scope('trilinear_similarity'):
+        w_c = tf.get_variable('w_c', [h, 1], dtype=tf.float32)
+        w_q = tf.get_variable('w_q', [h, 1], dtype=tf.float32)
+        w_cq = tf.get_variable('w_cq', [1, 1, h], dtype=tf.float32)
+        bias = tf.get_variable('bias', [1, 1, 1], dtype=tf.float32, initializer=tf.zeros_initializer())
+        S = tf.reshape(tf.matmul(tf.reshape(c, [-1, h]), w_c), [-1, c_len, 1]) \
+        + tf.reshape(tf.matmul(tf.reshape(q, [-1, h]), w_q), [-1, 1, q_len]) \
+        + tf.matmul(tf.multiply(c, w_cq), tf.transpose(q, perm=[0, 2, 1]))
+        S = tf.add(S, bias)
+    return S
+
+class BiDAFAttn(object):
+    '''Module for BiDAF attention cell from https://arxiv.org/abs/1611.01603
+    '''
+    def __init__(self, keep_prob=1):
+        self.keep_prob = keep_prob
+        
+    def build_graph(self, c, c_mask, q, q_mask):
+        with tf.variable_scope('BiDAFAttn'):
+            S = trilinear_similarity(c, q)
+            _, alpha = masked_softmax(S, tf.expand_dims(q_mask, 1), 2)
+            a = tf.matmul(alpha, q)
+            m = tf.reduce_max(S, axis=2)
+            _, beta = masked_softmax(m, c_mask, 1)
+            c_attn = tf.matmul(tf.expand_dims(beta, 1), c)
+            output = tf.concat([c, a, tf.multiply(c, a), tf.multiply(c, c_attn)], -1)
+        return output
+    
