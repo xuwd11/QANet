@@ -20,6 +20,9 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
 
 
+initializer_relu = lambda: tf.contrib.layers.variance_scaling_initializer(factor=2.0, mode='FAN_IN',
+                                                                          uniform=False, dtype=tf.float32)
+
 class RNNEncoder(object):
     """
     General-purpose module to encode a sequence using a RNN.
@@ -32,8 +35,6 @@ class RNNEncoder(object):
     we're just returning all the hidden states. The terminology "encoder"
     still applies because we're getting a different "encoding" of each
     position in the sequence, and we'll use the encodings downstream in the model.
-
-    This code uses a bidirectional GRU, but you could experiment with other types of RNN.
     """
 
     def __init__(self, hidden_size, keep_prob, cell_type):
@@ -53,7 +54,7 @@ class RNNEncoder(object):
         self.rnn_cell_bw = cell(self.hidden_size)
         self.rnn_cell_bw = DropoutWrapper(self.rnn_cell_bw, input_keep_prob=self.keep_prob)
 
-    def build_graph(self, inputs, masks):
+    def build_graph(self, inputs, masks, scope='RNNEncoder'):
         """
         Inputs:
           inputs: Tensor shape (batch_size, seq_len, input_size)
@@ -65,7 +66,7 @@ class RNNEncoder(object):
           out: Tensor shape (batch_size, seq_len, hidden_size*2).
             This is all hidden states (fw and bw hidden states are concatenated).
         """
-        with vs.variable_scope("RNNEncoder"):
+        with vs.variable_scope(scope):
             input_lens = tf.reduce_sum(masks, reduction_indices=1) # shape (batch_size)
 
             # Note: fw_out and bw_out are the hidden states for every timestep.
@@ -90,7 +91,7 @@ class SimpleSoftmaxLayer(object):
     def __init__(self):
         pass
 
-    def build_graph(self, inputs, masks):
+    def build_graph(self, inputs, masks, scope="SimpleSoftmaxLayer"):
         """
         Applies one linear downprojection layer, then softmax.
 
@@ -107,7 +108,7 @@ class SimpleSoftmaxLayer(object):
             The result of taking softmax over logits.
             This should have 0 in the padded locations, and the rest should sum to 1.
         """
-        with vs.variable_scope("SimpleSoftmaxLayer"):
+        with vs.variable_scope(scope):
 
             # Linear downprojection layer
             logits = tf.contrib.layers.fully_connected(inputs, num_outputs=1, activation_fn=None) # shape (batch_size, seq_len, 1)
@@ -144,7 +145,7 @@ class BasicAttn(object):
         self.key_vec_size = key_vec_size
         self.value_vec_size = value_vec_size
 
-    def build_graph(self, values, values_mask, keys):
+    def build_graph(self, values, values_mask, keys, scope="BasicAttn"):
         """
         Keys attend to values.
         For each key, return an attention distribution and an attention output vector.
@@ -163,7 +164,7 @@ class BasicAttn(object):
             This is the attention output; the weighted sum of the values
             (using the attention distribution as weights).
         """
-        with vs.variable_scope("BasicAttn"):
+        with vs.variable_scope(scope):
 
             # Calculate attention distribution
             values_t = tf.transpose(values, perm=[0, 2, 1]) # (batch_size, value_vec_size, num_values)
@@ -204,13 +205,13 @@ def masked_softmax(logits, mask, dim):
     prob_dist = tf.nn.softmax(masked_logits, dim)
     return masked_logits, prob_dist
 
-def trilinear_similarity(c, q):
+def trilinear_similarity(c, q, scope='trilinear_similarity'):
     '''
     Calculate trilinear similarity matrix from https://arxiv.org/abs/1611.01603
     '''
     c_shape, q_shape = c.get_shape().as_list(), q.get_shape().as_list()
     c_len, q_len, h = c_shape[1], q_shape[1], c_shape[2]
-    with tf.variable_scope('trilinear_similarity'):
+    with tf.variable_scope(scope):
         w_c = tf.get_variable('w_c', [h, 1], dtype=tf.float32)
         w_q = tf.get_variable('w_q', [h, 1], dtype=tf.float32)
         w_cq = tf.get_variable('w_cq', [1, 1, h], dtype=tf.float32)
@@ -227,8 +228,8 @@ class BiDAFAttn(object):
     def __init__(self, keep_prob=1):
         self.keep_prob = keep_prob
         
-    def build_graph(self, c, c_mask, q, q_mask):
-        with tf.variable_scope('BiDAFAttn'):
+    def build_graph(self, c, c_mask, q, q_mask, scope='BiDAFAttn'):
+        with tf.variable_scope(scope):
             S = trilinear_similarity(c, q)
             _, alpha = masked_softmax(S, tf.expand_dims(q_mask, 1), 2)
             a = tf.matmul(alpha, q)
