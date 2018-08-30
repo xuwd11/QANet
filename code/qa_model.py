@@ -54,7 +54,7 @@ class QAModel(object):
         self.word2id = word2id
 
         # Add all parts of the graph
-        with tf.variable_scope("QAModel", initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, uniform=True), regularizer=tf.contrib.layers.l2_regularizer(scale=3e-7)):
+        with tf.variable_scope("QAModel", initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True), regularizer=tf.contrib.layers.l2_regularizer(scale=3e-7)):
             self.add_placeholders()
             self.add_embedding_layer(emb_matrix)
             self.build_graph()
@@ -70,7 +70,8 @@ class QAModel(object):
         # Define optimizer and updates
         # (updates is what you need to fetch in session.run to do a gradient update)
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
-        opt = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate) # you can try other optimizers
+        lr = tf.minimum(FLAGS.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(self.global_step, tf.float32) + 1))
+        opt = tf.train.AdamOptimizer(learning_rate=lr) # you can try other optimizers
         self.updates = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
 
         # Define savers (for checkpointing) and summaries (for tensorboard)
@@ -135,7 +136,7 @@ class QAModel(object):
             context_hiddens = encoder.build_graph(self.context_embs, self.context_mask) # (batch_size, context_len, hidden_size*2)
             question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask) # (batch_size, question_len, hidden_size*2)
         elif self.FLAGS.cell_type == 'qanet':
-            encoder = QAEncoder(num_blocks=1, num_layers=4, num_heads=8, \
+            encoder = QAEncoder(num_blocks=1, num_layers=4, num_heads=2, \
                                 filters=self.FLAGS.hidden_size, kernel_size=7, \
                                 keep_prob=self.keep_prob, input_mapping=True)
             context_hiddens = encoder.build_graph(self.context_embs, self.context_mask)
@@ -186,7 +187,7 @@ class QAModel(object):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
         elif self.FLAGS.modeling_layer == 'qanet':
-            modeling_encoder = QAEncoder(num_blocks=1, num_layers=2, num_heads=8, \
+            modeling_encoder = QAEncoder(num_blocks=7, num_layers=2, num_heads=2, \
                                          filters=self.FLAGS.hidden_size, kernel_size=5, \
                                          keep_prob=self.keep_prob, input_mapping=False, \
                                          scope='modeling_encoder')
