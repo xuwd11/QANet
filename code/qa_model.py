@@ -164,6 +164,7 @@ class QAModel(object):
             with vs.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(blended_reps_final, self.context_mask)
+                
         elif self.FLAGS.modeling_layer == 'rnn':
             encoder_start = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, cell_type=self.FLAGS.cell_type)
             m1 = encoder_start.build_graph(blended_reps, self.context_mask, scope='m1')

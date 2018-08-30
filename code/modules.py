@@ -14,6 +14,8 @@
 
 """This file contains some basic model components"""
 
+import math
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops.rnn_cell import DropoutWrapper
@@ -121,7 +123,8 @@ class SimpleSoftmaxLayer(object):
 
             return masked_logits, prob_dist
 
-
+       
+        
 class BasicAttn(object):
     """Module for basic attention.
 
@@ -198,7 +201,7 @@ class BiDAFAttn(object):
             _, beta = masked_softmax(m, c_mask, 1)
             c_attn = tf.matmul(tf.expand_dims(beta, 1), c)
             output = tf.concat([c, a, tf.multiply(c, a), tf.multiply(c, c_attn)], -1)
-        return output
+            return output
 
 
 def masked_softmax(logits, mask, dim):
@@ -240,7 +243,7 @@ def trilinear_similarity(c, q, scope='trilinear_similarity'):
         + tf.reshape(tf.matmul(tf.reshape(q, [-1, h]), w_q), [-1, 1, q_len]) \
         + tf.matmul(tf.multiply(c, w_cq), tf.transpose(q, perm=[0, 2, 1]))
         S = tf.add(S, bias)
-    return S
+        return S
 
 
 def max_product_span(start_dist, end_dist):
@@ -269,3 +272,129 @@ def max_product_span(start_dist, end_dist):
         i += 1
         
     return start_pos, end_pos
+
+
+class QAEncoder(object):
+    '''
+    Encoder block in QANet from https://arxiv.org/abs/1804.09541
+    '''
+    def __init__(self):
+        pass
+    
+    def build_graph(self, scope='QAEncoder'):
+        pass
+
+
+def get_timing_signal_1d(length, channels, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
+    '''
+    Gets a bunch of sinusoids of different frequencies.
+    Copied from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    '''
+    position = tf.to_float(tf.range(length) + start_index)
+    num_timescales = channels // 2
+    log_timescale_increment = (
+        math.log(float(max_timescale) / float(min_timescale)) /
+        (tf.to_float(num_timescales) - 1))
+    inv_timescales = min_timescale * tf.exp(
+        tf.to_float(tf.range(num_timescales)) * -log_timescale_increment)
+    scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(inv_timescales, 0)
+    signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
+    signal = tf.pad(signal, [[0, 0], [0, tf.mod(channels, 2)]])
+    signal = tf.reshape(signal, [1, length, channels])
+    return signal
+    
+
+def add_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
+    '''
+    Adds a bunch of sinusoids of different frequencies to a Tensor.
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    '''
+    length = tf.shape(x)[1]
+    channels = tf.shape(x)[2]
+    signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale, start_index)
+    return x + signal
+
+def layer_norm_vars(filters):
+    """
+    Create Variables for layer norm.
+    Copied from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
+    """
+    scale = tf.get_variable("layer_norm_scale", [filters], initializer=tf.ones_initializer())
+    bias = tf.get_variable( "layer_norm_bias", [filters], initializer=tf.zeros_initializer())
+    return scale, bias
+
+
+def layer_norm_compute_python(x, epsilon, scale, bias):
+    """Layer norm raw computation.
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
+    """
+    # epsilon, scale, bias = [cast_like(t, x) for t in [epsilon, scale, bias]]
+    mean = tf.reduce_mean(x, axis=[-1], keepdims=True)
+    variance = tf.reduce_mean(tf.square(x - mean), axis=[-1], keepdims=True)
+    norm_x = (x - mean) * tf.rsqrt(variance + epsilon)
+    return norm_x * scale + bias
+
+def layer_norm(x, filters=None, epsilon=1e-6, scope='layer_norm', reuse=None):
+    """Layer normalize the tensor x, averaging over the last dimension.
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
+    """
+    if filters is None:
+        filters = x.shape[-1]
+    with tf.variable_scope(scope, values=[x], reuse=reuse):
+        scale = tf.get_variable("layer_norm_scale", [filters], initializer=tf.ones_initializer())
+        bias = tf.get_variable("layer_norm_bias", [filters], initializer=tf.zeros_initializer())
+        result = layer_norm_compute_python(x, epsilon, scale, bias)
+        return result
+
+def scaled_dot_product_attention_simple(q, k, v, bias, scope='scaled_dot_product_attention_simple'):
+    '''Scaled dot-product attention. One head. One spatial dimension.
+    Copied from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    '''
+    with tf.variable_scope(scope):
+        scalar = tf.rsqrt(tf.to_float(q.shape[2]))
+        logits = tf.matmul(q * scalar, k, transpose_b=True)
+        if bias:
+            b = tf.get_variable('bias', logits.shape[-1], initializer=tf.zeros_initializer())
+            logits += b
+        weights = tf.nn.softmax(logits, name='attention_weights')
+        return tf.matmul(weights, v)
+    
+def multihead_self_attention(x, nums_heads, head_size=None, bias=True, epsilon=1e-6,
+                             scope='multihead_self_attention'):
+    '''Multihead scaled-dot-product self-attention.
+    
+    Includes layer norm.
+    
+    Returns multihead-self-attention(layer_norm(x))
+    
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    '''
+    io_size = x.shape[-1]
+    if head_size is None:
+        assert io_size % num_head == 0
+        head_size = io_size // num_heads
+        
+    def forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
+        n = layer_norm_compute_python(x, epsilon, norm_scale, norm_bias)
+        wqkv_split = tf.unstack(wqkv, num=num_heads)
+        wo_split = tf.unstack(wo, num=num_heads)
+        y = 0
+        for h in range(num_heads):
+            with tf.control_dependencies([y] if h > 0 else []):
+                combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
+                q, k, v = tf.split(combined, 3, axis=2)
+                o = scaled_dot_product_attention_simple(q, k, v, attention_bias)
+                y += tf.nn.conv1d(o, wo_split[h], 1, "SAME")
+        return y
+    
+    forward_fn = forward_internal
+    
+    with tf.variable_scope(scope, values=[x]):
+        wqkv = tf.get_variable('wqkv', [num_heads, 1, io_size, 3 * head_size],
+                               initializer=tf.random_normal_initializer(stddev=io_size**-0.5))
+        wo = tf.get_variable('wo', [num_heads, 1, head_size, io_size],
+                             initializer=tf.random_normal_initializer(stddev=(head_size * num_heads)**-0.5))
+        norm_scale, norm_bias = layer_norm_vars(io_size)
+    y = forward_fn(x, wqkv, wo, bias, norm_scale, norm_bias)
+    y.set_shape(x.get_shape())
+    return y
