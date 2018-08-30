@@ -30,7 +30,7 @@ from tensorflow.python.ops import embedding_ops
 from evaluate import exact_match_score, f1_score
 from data_batcher import get_batch_generator
 from pretty_print import print_example
-from modules import RNNEncoder, SimpleSoftmaxLayer, BasicAttn, BiDAFAttn, initializer_relu, max_product_span
+from modules import RNNEncoder, QAEncoder, SimpleSoftmaxLayer, BasicAttn, BiDAFAttn, initializer_relu, max_product_span
 
 logging.basicConfig(level=logging.INFO)
 
@@ -130,9 +130,16 @@ class QAModel(object):
         # Use a RNN to get hidden states for the context and the question
         # Note: here the RNNEncoder is shared (i.e. the weights are the same)
         # between the context and the question.
-        encoder = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, cell_type=self.FLAGS.cell_type)
-        context_hiddens = encoder.build_graph(self.context_embs, self.context_mask) # (batch_size, context_len, hidden_size*2)
-        question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask) # (batch_size, question_len, hidden_size*2)
+        if self.FLAGS.cell_type in ['rnn_gru', 'rnn_lstm']:
+            encoder = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, cell_type=self.FLAGS.cell_type)
+            context_hiddens = encoder.build_graph(self.context_embs, self.context_mask) # (batch_size, context_len, hidden_size*2)
+            question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask) # (batch_size, question_len, hidden_size*2)
+        elif self.FLAGS.cell_type == 'qanet':
+            encoder = QAEncoder(num_blocks=1, num_layers=4, num_heads=8, \
+                                filters=self.FLAGS.hidden_size, kernel_size=7, \
+                                keep_prob=self.keep_prob, input_mapping=True)
+            context_hiddens = encoder.build_graph(self.context_embs, self.context_mask)
+            question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask)
         
         if self.FLAGS.attention == 'basic':
             # Use context hidden states to attend to question hidden states
@@ -166,16 +173,33 @@ class QAModel(object):
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(blended_reps_final, self.context_mask)
                 
         elif self.FLAGS.modeling_layer == 'rnn':
-            encoder_start = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, cell_type=self.FLAGS.cell_type)
-            m1 = encoder_start.build_graph(blended_reps, self.context_mask, scope='m1')
-            encoder_end = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, cell_type=self.FLAGS.cell_type)
-            m2 = encoder_end.build_graph(m1, self.context_mask, scope='m2')
+            encoder_start = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, \
+                                       cell_type=self.FLAGS.cell_type, scope='m1')
+            m1 = encoder_start.build_graph(blended_reps, self.context_mask)
+            encoder_end = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, \
+                                     cell_type=self.FLAGS.cell_type, scope='m2')
+            m2 = encoder_end.build_graph(m1, self.context_mask)
             with vs.variable_scope("StartDist"):
                 softmax_layer_start = SimpleSoftmaxLayer()
                 self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([blended_reps, m1], -1), self.context_mask)
             with vs.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
+        elif self.FLAGS.modeling_layer == 'qanet':
+            modeling_encoder = QAEncoder(num_blocks=1, num_layers=2, num_heads=8, \
+                                         filters=self.FLAGS.hidden_size, kernel_size=5, \
+                                         keep_prob=self.keep_prob, input_mapping=False, \
+                                         scope='modeling_encoder')
+            m0 = tf.contrib.layers.fully_connected(blended_reps, num_outputs=self.FLAGS.hidden_size, activation_fn=None) # blended_reps_final is shape (batch_size, context_len, hidden_size)
+            m1 = modeling_encoder.build_graph(m0, self.context_mask)
+            m2 = modeling_encoder.build_graph(m1, self.context_mask)
+            m3 = modeling_encoder.build_graph(m2, self.context_mask)
+            with vs.variable_scope("StartDist"):
+                softmax_layer_start = SimpleSoftmaxLayer()
+                self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([m1, m2], -1), self.context_mask)
+            with vs.variable_scope("EndDist"):
+                softmax_layer_end = SimpleSoftmaxLayer()
+                self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([m1, m3], -1), self.context_mask)
 
 
     def add_loss(self):

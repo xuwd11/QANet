@@ -41,16 +41,19 @@ class RNNEncoder(object):
     position in the sequence, and we'll use the encodings downstream in the model.
     """
 
-    def __init__(self, hidden_size, keep_prob, cell_type):
+    def __init__(self, hidden_size, keep_prob, cell_type, scope='RNNEncoder'):
         """
         Inputs:
           hidden_size: int. Hidden size of the RNN
           keep_prob: Tensor containing a single scalar that is the keep probability (for dropout)
         """
+        self.scope = scope
         if cell_type == 'rnn_lstm':
             cell = rnn_cell.LSTMCell
         elif cell_type == 'rnn_gru':
             cell = rnn_cell.GRUCell
+        else:
+            cell = rnn_cell.LSTMCell
         self.hidden_size = hidden_size
         self.keep_prob = keep_prob
         self.rnn_cell_fw = cell(self.hidden_size)
@@ -58,7 +61,7 @@ class RNNEncoder(object):
         self.rnn_cell_bw = cell(self.hidden_size)
         self.rnn_cell_bw = DropoutWrapper(self.rnn_cell_bw, input_keep_prob=self.keep_prob)
 
-    def build_graph(self, inputs, masks, scope='RNNEncoder'):
+    def build_graph(self, inputs, masks):
         """
         Inputs:
           inputs: Tensor shape (batch_size, seq_len, input_size)
@@ -70,7 +73,7 @@ class RNNEncoder(object):
           out: Tensor shape (batch_size, seq_len, hidden_size*2).
             This is all hidden states (fw and bw hidden states are concatenated).
         """
-        with vs.variable_scope(scope):
+        with vs.variable_scope(self.scope):
             input_lens = tf.reduce_sum(masks, reduction_indices=1) # shape (batch_size)
 
             # Note: fw_out and bw_out are the hidden states for every timestep.
@@ -85,6 +88,40 @@ class RNNEncoder(object):
 
             return out
 
+class QAEncoder(object):
+    '''
+    Encoder block in QANet from https://arxiv.org/abs/1804.09541
+    '''
+    def __init__(self, num_blocks, num_layers, num_heads, filters, kernel_size, \
+                 keep_prob, input_mapping=False, scope='QAEncoder'):
+        self.scope = scope
+        self.num_blocks = num_blocks
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.keep_prob = keep_prob
+        self.input_mapping = input_mapping
+        
+    def build_graph(self, inputs, masks):
+        with tf.variable_scope(self.scope, reuse=tf.AUTO_REUSE):
+            if self.input_mapping:
+                inputs = separable_conv1d(inputs, filters=self.filters, \
+                                          kernel_size=1, padding='SAME', scope='input_mapping')
+            outputs = inputs
+            for i in range(self.num_blocks):
+                with tf.variable_scope('block{}'.format(i + 1)):
+                    outputs = add_timing_signal_1d(outputs)
+                    for j in range(self.num_layers):
+                        with tf.variable_scope('conv{}'.format(j + 1)):
+                            outputs = layer_dropout(
+                                x=outputs, 
+                                fn=lambda x:tf.nn.dropout(separable_conv1d(layer_norm(x), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', scope='conv{}'.format(j + 1)), self.keep_prob), 
+                                keep_prob=1 - (j + 1) / self.num_layers * (1 - self.keep_prob))
+                    outputs = outputs + tf.nn.dropout(multihead_self_attention(layer_norm(outputs), masks, self.num_heads), self.keep_prob)
+                    outputs = outputs + tf.nn.dropout(tf.contrib.layers.fully_connected(layer_norm(outputs), self.filters, activation_fn=None), self.keep_prob)
+            return outputs
+        
 
 class SimpleSoftmaxLayer(object):
     """
@@ -92,10 +129,10 @@ class SimpleSoftmaxLayer(object):
     and return probability distribution over those states.
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, scope="SimpleSoftmaxLayer"):
+        self.scope = scope
 
-    def build_graph(self, inputs, masks, scope="SimpleSoftmaxLayer"):
+    def build_graph(self, inputs, masks):
         """
         Applies one linear downprojection layer, then softmax.
 
@@ -112,7 +149,7 @@ class SimpleSoftmaxLayer(object):
             The result of taking softmax over logits.
             This should have 0 in the padded locations, and the rest should sum to 1.
         """
-        with vs.variable_scope(scope):
+        with vs.variable_scope(self.scope):
 
             # Linear downprojection layer
             logits = tf.contrib.layers.fully_connected(inputs, num_outputs=1, activation_fn=None) # shape (batch_size, seq_len, 1)
@@ -139,18 +176,19 @@ class BasicAttn(object):
     module with other inputs.
     """
 
-    def __init__(self, keep_prob, key_vec_size, value_vec_size):
+    def __init__(self, keep_prob, key_vec_size, value_vec_size, scope="BasicAttn"):
         """
         Inputs:
           keep_prob: tensor containing a single scalar that is the keep probability (for dropout)
           key_vec_size: size of the key vectors. int
           value_vec_size: size of the value vectors. int
         """
+        self.scope = scope
         self.keep_prob = keep_prob
         self.key_vec_size = key_vec_size
         self.value_vec_size = value_vec_size
 
-    def build_graph(self, values, values_mask, keys, scope="BasicAttn"):
+    def build_graph(self, values, values_mask, keys):
         """
         Keys attend to values.
         For each key, return an attention distribution and an attention output vector.
@@ -169,7 +207,7 @@ class BasicAttn(object):
             This is the attention output; the weighted sum of the values
             (using the attention distribution as weights).
         """
-        with vs.variable_scope(scope):
+        with vs.variable_scope(self.scope):
 
             # Calculate attention distribution
             values_t = tf.transpose(values, perm=[0, 2, 1]) # (batch_size, value_vec_size, num_values)
@@ -189,11 +227,12 @@ class BasicAttn(object):
 class BiDAFAttn(object):
     '''Module for BiDAF attention cell from https://arxiv.org/abs/1611.01603
     '''
-    def __init__(self, keep_prob=1):
+    def __init__(self, keep_prob=1.0, scope='BiDAFAttn'):
+        self.scope = scope
         self.keep_prob = keep_prob
         
-    def build_graph(self, c, c_mask, q, q_mask, scope='BiDAFAttn'):
-        with tf.variable_scope(scope):
+    def build_graph(self, c, c_mask, q, q_mask):
+        with tf.variable_scope(self.scope):
             S = trilinear_similarity(c, q)
             _, alpha = masked_softmax(S, tf.expand_dims(q_mask, 1), 2)
             a = tf.matmul(alpha, q)
@@ -204,7 +243,7 @@ class BiDAFAttn(object):
             return output
 
 
-def masked_softmax(logits, mask, dim):
+def masked_softmax(logits, mask, axis=-1):
     """
     Takes masked softmax over given dimension of logits.
 
@@ -225,7 +264,7 @@ def masked_softmax(logits, mask, dim):
     """
     exp_mask = (1 - tf.cast(mask, 'float')) * (-1e30) # -large where there's padding, 0 elsewhere
     masked_logits = tf.add(logits, exp_mask) # where there's padding, set logits to -large
-    prob_dist = tf.nn.softmax(masked_logits, dim)
+    prob_dist = tf.nn.softmax(masked_logits, axis)
     return masked_logits, prob_dist
 
 def trilinear_similarity(c, q, scope='trilinear_similarity'):
@@ -272,19 +311,17 @@ def max_product_span(start_dist, end_dist):
         i += 1
         
     return start_pos, end_pos
-
-
-class QAEncoder(object):
+              
+                
+def layer_dropout(x, fn, keep_prob):
     '''
-    Encoder block in QANet from https://arxiv.org/abs/1804.09541
+    Layer dropout in https://arxiv.org/abs/1603.09382
     '''
-    def __init__(self):
-        pass
+    return tf.cond(tf.random_uniform([]) <= keep_prob,
+                   lambda: x + fn(x) / keep_prob,
+                   lambda: x)
     
-    def build_graph(self, scope='QAEncoder'):
-        pass
-
-
+        
 def get_timing_signal_1d(length, channels, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
     '''
     Gets a bunch of sinusoids of different frequencies.
@@ -309,8 +346,8 @@ def add_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4, start_index=
     Adds a bunch of sinusoids of different frequencies to a Tensor.
     Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
     '''
-    length = tf.shape(x)[1]
-    channels = tf.shape(x)[2]
+    length = x.get_shape().as_list()[1]
+    channels = x.get_shape().as_list()[2]
     signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale, start_index)
     return x + signal
 
@@ -339,27 +376,27 @@ def layer_norm(x, filters=None, epsilon=1e-6, scope='layer_norm', reuse=None):
     Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
     """
     if filters is None:
-        filters = x.shape[-1]
+        filters = x.get_shape().as_list()[-1]
     with tf.variable_scope(scope, values=[x], reuse=reuse):
         scale = tf.get_variable("layer_norm_scale", [filters], initializer=tf.ones_initializer())
         bias = tf.get_variable("layer_norm_bias", [filters], initializer=tf.zeros_initializer())
         result = layer_norm_compute_python(x, epsilon, scale, bias)
         return result
 
-def scaled_dot_product_attention_simple(q, k, v, bias, scope='scaled_dot_product_attention_simple'):
+def scaled_dot_product_attention_simple(q, k, v, bias, mask, scope='scaled_dot_product_attention_simple'):
     '''Scaled dot-product attention. One head. One spatial dimension.
-    Copied from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
     '''
+    mask = tf.expand_dims(mask, 1)
     with tf.variable_scope(scope):
-        scalar = tf.rsqrt(tf.to_float(q.shape[2]))
+        scalar = tf.rsqrt(tf.to_float(q.get_shape().as_list()[2]))
         logits = tf.matmul(q * scalar, k, transpose_b=True)
-        if bias:
-            b = tf.get_variable('bias', logits.shape[-1], initializer=tf.zeros_initializer())
-            logits += b
-        weights = tf.nn.softmax(logits, name='attention_weights')
+        if bias is not None:
+            logits += bias
+        _, weights = masked_softmax(logits, mask, -1)
         return tf.matmul(weights, v)
     
-def multihead_self_attention(x, nums_heads, head_size=None, bias=True, epsilon=1e-6,
+def multihead_self_attention(x, mask, num_heads, head_size=None, bias=None, epsilon=1e-6,
                              scope='multihead_self_attention'):
     '''Multihead scaled-dot-product self-attention.
     
@@ -369,9 +406,9 @@ def multihead_self_attention(x, nums_heads, head_size=None, bias=True, epsilon=1
     
     Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
     '''
-    io_size = x.shape[-1]
+    io_size = x.get_shape().as_list()[-1]
     if head_size is None:
-        assert io_size % num_head == 0
+        assert io_size % num_heads == 0
         head_size = io_size // num_heads
         
     def forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
@@ -383,7 +420,7 @@ def multihead_self_attention(x, nums_heads, head_size=None, bias=True, epsilon=1
             with tf.control_dependencies([y] if h > 0 else []):
                 combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
                 q, k, v = tf.split(combined, 3, axis=2)
-                o = scaled_dot_product_attention_simple(q, k, v, attention_bias)
+                o = scaled_dot_product_attention_simple(q, k, v, attention_bias, mask)
                 y += tf.nn.conv1d(o, wo_split[h], 1, "SAME")
         return y
     
@@ -395,6 +432,16 @@ def multihead_self_attention(x, nums_heads, head_size=None, bias=True, epsilon=1
         wo = tf.get_variable('wo', [num_heads, 1, head_size, io_size],
                              initializer=tf.random_normal_initializer(stddev=(head_size * num_heads)**-0.5))
         norm_scale, norm_bias = layer_norm_vars(io_size)
-    y = forward_fn(x, wqkv, wo, bias, norm_scale, norm_bias)
-    y.set_shape(x.get_shape())
-    return y
+        y = forward_fn(x, wqkv, wo, bias, norm_scale, norm_bias)
+        y.set_shape(x.get_shape())
+        return y
+
+def separable_conv1d(inputs, filters, kernel_size, padding, scope='conv1d'):
+    _, length, channels = inputs.get_shape().as_list()
+    inputs = tf.expand_dims(inputs, 2)
+    with tf.variable_scope(scope):
+        depthwise_filter = tf.get_variable('depthwise_filter', [kernel_size, 1, channels, 1], dtype=tf.float32)
+        pointwise_filter = tf.get_variable('pointwise_filter', [1, 1, channels, filters], dtype=tf.float32)
+        outputs = tf.nn.separable_conv2d(inputs, depthwise_filter, pointwise_filter, \
+                                         strides=[1, 1, 1, 1], padding=padding)
+        return tf.squeeze(outputs, 2)

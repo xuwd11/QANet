@@ -39,16 +39,17 @@ EXPERIMENTS_DIR = os.path.join(MAIN_DIR, "experiments") # relative path of exper
 # High-level options
 tf.app.flags.DEFINE_integer("gpu", 1, "Which GPU to use, if you have multiple.")
 tf.app.flags.DEFINE_string("mode", "train", "Available modes: train / show_examples / official_eval")
+tf.app.flags.DEFINE_string("reloading", "yes", "Available modes: train / show_examples / official_eval")
 tf.app.flags.DEFINE_string("experiment_name", "", "Unique name for your experiment. This will create a directory by this name in the experiments/ directory, which will hold all data related to this experiment")
 tf.app.flags.DEFINE_integer("num_epochs", 0, "Number of epochs to train. 0 means train indefinitely")
 tf.app.flags.DEFINE_string("attention", "bidaf", "Attention mechanism to use")
-tf.app.flags.DEFINE_string("cell_type", "rnn_lstm", "Cell type to use")
-tf.app.flags.DEFINE_string("modeling_layer", "rnn", "Modeling layer and output layer to use")
+tf.app.flags.DEFINE_string("cell_type", "qanet", "Type of encoder to use")
+tf.app.flags.DEFINE_string("modeling_layer", "qanet", "Modeling layer and output layer to use")
 
 # Hyperparameters
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 5.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.25, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.1, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 64, "Batch size to use")
 tf.app.flags.DEFINE_integer("hidden_size", 128, "Size of the hidden states")
 tf.app.flags.DEFINE_integer("context_len", 600, "The maximum context length of your model")
@@ -120,12 +121,15 @@ def main(unused_argv):
         FLAGS.json_out_path = os.path.join(FLAGS.train_dir, FLAGS.json_out_path)
 
     # Load saved flags
-    if FLAGS.mode != 'train':
+    if (FLAGS.mode != 'train' or FLAGS.reloading == 'yes') \
+    and os.path.exists(os.path.join(FLAGS.train_dir, "flags.json")):
+        print('Try reloading old flags...')
         with open(os.path.join(FLAGS.train_dir, "flags.json"), 'r') as fin:
             saved_flags = json.load(fin)
             for name, value in saved_flags.items():
                 if name != 'mode' and value != '':
                     FLAGS.__flags[name].value = value
+        print('Old flags have been reloaded successfully.')
     
     # Initialize bestmodel directory
     bestmodel_dir = os.path.join(FLAGS.train_dir, "best_checkpoint")
