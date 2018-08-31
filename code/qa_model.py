@@ -70,7 +70,8 @@ class QAModel(object):
         # Define optimizer and updates
         # (updates is what you need to fetch in session.run to do a gradient update)
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
-        lr = tf.minimum(FLAGS.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(self.global_step, tf.float32) + 1))
+        #lr = tf.minimum(FLAGS.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(self.global_step, tf.float32) + 1))
+        lr = FLAGS.learning_rate
         opt = tf.train.AdamOptimizer(learning_rate=lr) # you can try other optimizers
         self.updates = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
 
@@ -136,8 +137,9 @@ class QAModel(object):
             context_hiddens = encoder.build_graph(self.context_embs, self.context_mask) # (batch_size, context_len, hidden_size*2)
             question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask) # (batch_size, question_len, hidden_size*2)
         elif self.FLAGS.cell_type == 'qanet':
-            encoder = QAEncoder(num_blocks=1, num_layers=4, num_heads=2, \
-                                filters=self.FLAGS.hidden_size, kernel_size=7, \
+            encoder = QAEncoder(num_blocks=self.FLAGS.emb_num_blocks, num_layers=self.FLAGS.emb_num_layers, \
+                                num_heads=self.FLAGS.emb_num_heads, \
+                                filters=self.FLAGS.hidden_size, kernel_size=self.FLAGS.emb_kernel_size, \
                                 keep_prob=self.keep_prob, input_mapping=True)
             context_hiddens = encoder.build_graph(self.context_embs, self.context_mask)
             question_hiddens = encoder.build_graph(self.qn_embs, self.qn_mask)
@@ -187,8 +189,11 @@ class QAModel(object):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
         elif self.FLAGS.modeling_layer == 'qanet':
-            modeling_encoder = QAEncoder(num_blocks=7, num_layers=2, num_heads=2, \
-                                         filters=self.FLAGS.hidden_size, kernel_size=5, \
+            modeling_encoder = QAEncoder(num_blocks=self.FLAGS.model_num_blocks, \
+                                         num_layers=self.FLAGS.model_num_layers, \
+                                         num_heads=self.FLAGS.model_num_heads, \
+                                         filters=self.FLAGS.hidden_size, \
+                                         kernel_size=self.FLAGS.model_kernel_size, \
                                          keep_prob=self.keep_prob, input_mapping=False, \
                                          scope='modeling_encoder')
             m0 = tf.contrib.layers.fully_connected(blended_reps, num_outputs=self.FLAGS.hidden_size, activation_fn=None) # blended_reps_final is shape (batch_size, context_len, hidden_size)

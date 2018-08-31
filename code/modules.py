@@ -21,6 +21,7 @@ import tensorflow as tf
 from tensorflow.python.ops.rnn_cell import DropoutWrapper
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
+from tensorflow.python.framework import function
 
 
 initializer_relu = lambda: tf.contrib.layers.variance_scaling_initializer(factor=2.0, mode='FAN_IN',
@@ -106,8 +107,8 @@ class QAEncoder(object):
     def build_graph(self, inputs, masks):
         with tf.variable_scope(self.scope, reuse=tf.AUTO_REUSE):
             if self.input_mapping:
-                inputs = separable_conv1d(inputs, filters=self.filters, \
-                                          kernel_size=1, padding='SAME', scope='input_mapping')
+                inputs = tf.layers.conv1d(inputs, filters=self.filters, \
+                                          kernel_size=1, padding='SAME', name='input_mapping')
             outputs = inputs
             for i in range(self.num_blocks):
                 with tf.variable_scope('block{}'.format(i + 1)):
@@ -116,10 +117,16 @@ class QAEncoder(object):
                         with tf.variable_scope('conv{}'.format(j + 1)):
                             outputs = layer_dropout(
                                 x=outputs, 
-                                fn=lambda x:tf.nn.dropout(separable_conv1d(layer_norm(x), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', scope='conv{}'.format(j + 1)), self.keep_prob), 
+                                fn=lambda x:tf.nn.dropout(tf.layers.separable_conv1d(layer_norm(x, scope='ln1'), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', name='conv{}'.format(j + 1)), self.keep_prob), 
                                 keep_prob=1 - (j + 1) / self.num_layers * (1 - self.keep_prob))
-                    outputs = outputs + tf.nn.dropout(multihead_self_attention(layer_norm(outputs), masks, self.num_heads), self.keep_prob)
-                    outputs = outputs + tf.nn.dropout(tf.contrib.layers.fully_connected(layer_norm(outputs), self.filters, activation_fn=None), self.keep_prob)
+                    outputs = tf.nn.dropout(outputs + multihead_self_attention(layer_norm(outputs, scope='ln2'), masks, self.num_heads), self.keep_prob)
+                    res = outputs
+                    outputs = layer_norm(outputs, scope='ln3')
+                    outputs = tf.nn.relu(tf.layers.conv1d(
+                        outputs, filters=self.filters, kernel_size=1, \
+                        padding='SAME', kernel_initializer=initializer_relu(), name='ffn1'))
+                    outputs = tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1, padding='SAME', name='ffn2')
+                    outputs = tf.nn.dropout(res + outputs, self.keep_prob)
             return outputs
         
 
@@ -383,19 +390,19 @@ def layer_norm(x, filters=None, epsilon=1e-6, scope='layer_norm', reuse=None):
         result = layer_norm_compute_python(x, epsilon, scale, bias)
         return result
 
-def scaled_dot_product_attention_simple(q, k, v, bias, mask, scope='scaled_dot_product_attention_simple'):
+def scaled_dot_product_attention_simple(q, k, v, bias, scope='scaled_dot_product_attention_simple'):
     '''Scaled dot-product attention. One head. One spatial dimension.
     Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
     '''
-    mask = tf.expand_dims(mask, 1)
     with tf.variable_scope(scope):
         scalar = tf.rsqrt(tf.to_float(q.get_shape().as_list()[2]))
         logits = tf.matmul(q * scalar, k, transpose_b=True)
         if bias is not None:
             logits += bias
-        _, weights = masked_softmax(logits, mask, -1)
+        weights = tf.nn.softmax(logits, name='attention_weights')
         return tf.matmul(weights, v)
-    
+
+"""
 def multihead_self_attention(x, mask, num_heads, head_size=None, bias=None, epsilon=1e-6,
                              scope='multihead_self_attention'):
     '''Multihead scaled-dot-product self-attention.
@@ -445,3 +452,107 @@ def separable_conv1d(inputs, filters, kernel_size, padding, scope='conv1d'):
         outputs = tf.nn.separable_conv2d(inputs, depthwise_filter, pointwise_filter, \
                                          strides=[1, 1, 1, 1], padding=padding)
         return tf.squeeze(outputs, 2)
+"""
+
+def attention_bias_ignore_padding(mask):
+    '''Create an bias tensor to be added to attention logits.
+    
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    '''
+    ret = (1 - tf.cast(mask, 'float')) * (-1e9)
+    return tf.expand_dims(tf.expand_dims(ret, axis=1), axis=1)
+
+_function_cache = {}
+
+def multihead_self_attention(x, mask, num_heads, head_size=None, bias=True, epsilon=1e-6, forget=False,
+                             scope='multihead_self_attention'):
+    '''Multihead scaled-dot-product self-attention.
+    
+    Includes layer norm.
+    
+    Returns multihead-self-attention(layer_norm(x))
+    
+    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
+    '''
+    if bias:
+        bias = attention_bias_ignore_padding(mask)
+    io_size = x.get_shape().as_list()[-1]
+    if head_size is None:
+        assert io_size % num_heads == 0
+        head_size = io_size // num_heads
+
+    def forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
+        """Forward function."""
+        n = layer_norm_compute_python(x, epsilon, norm_scale, norm_bias)
+        wqkv_split = tf.unstack(wqkv, num=num_heads)
+        wo_split = tf.unstack(wo, num=num_heads)
+        y = 0
+        for h in range(num_heads):
+            with tf.control_dependencies([y] if h > 0 else []):
+                combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
+                q, k, v = tf.split(combined, 3, axis=2)
+                o = scaled_dot_product_attention_simple(q, k, v, attention_bias)
+                y += tf.nn.conv1d(o, wo_split[h], 1, "SAME")
+        return y
+    
+    key = ("multihead_self_attention_memory_efficient %s %s" % (num_heads, epsilon))
+    
+    if not forget:
+        forward_fn = forward_internal
+    elif key in _function_cache:
+        forward_fn = _function_cache[key]
+    else:
+        @function.Defun(compiled=True)
+        def grad_fn(x, wqkv, wo, attention_bias, norm_scale, norm_bias, dy):
+            """Custom gradient function."""
+            with tf.control_dependencies([dy]):
+                n = layer_norm_compute_python(x, epsilon, norm_scale, norm_bias)
+                wqkv_split = tf.unstack(wqkv, num=num_heads)
+                wo_split = tf.unstack(wo, num=num_heads)
+                deps = []
+                dwqkvs = []
+                dwos = []
+                dn = 0
+                for h in range(num_heads):
+                    with tf.control_dependencies(deps):
+                        combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
+                        q, k, v = tf.split(combined, 3, axis=2)
+                        o = scaled_dot_product_attention_simple(q, k, v, attention_bias)
+                        partial_y = tf.nn.conv1d(o, wo_split[h], 1, "SAME")
+                        pdn, dwqkvh, dwoh = tf.gradients(
+                            ys=[partial_y],
+                            xs=[n, wqkv_split[h], wo_split[h]],
+                            grad_ys=[dy])
+                        dn += pdn
+                        dwqkvs.append(dwqkvh)
+                        dwos.append(dwoh)
+                        deps = [dn, dwqkvh, dwoh]
+                dwqkv = tf.stack(dwqkvs)
+                dwo = tf.stack(dwos)
+                with tf.control_dependencies(deps):
+                    dx, dnorm_scale, dnorm_bias = tf.gradients(
+                        ys=[n], xs=[x, norm_scale, norm_bias], grad_ys=[dn])
+                return (dx, dwqkv, dwo, tf.zeros_like(attention_bias), dnorm_scale,
+                        dnorm_bias)
+
+        @function.Defun(
+            grad_func=grad_fn, compiled=True, separate_compiled_gradients=True)
+        def forward_fn(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
+            return forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias)
+
+        _function_cache[key] = forward_fn
+
+    if bias is not None:
+        bias = tf.squeeze(bias, 1)
+    with tf.variable_scope(scope, values=[x]):
+        wqkv = tf.get_variable(
+            "wqkv", [num_heads, 1, io_size, 3 * head_size],
+            initializer=tf.random_normal_initializer(stddev=io_size**-0.5))
+        wo = tf.get_variable(
+            "wo", [num_heads, 1, head_size, io_size],
+            initializer=tf.random_normal_initializer(
+                stddev=(head_size * num_heads)**-0.5))
+        norm_scale, norm_bias = layer_norm_vars(io_size)
+        y = forward_fn(x, wqkv, wo, bias, norm_scale, norm_bias)
+        y.set_shape(x.get_shape())
+        return y

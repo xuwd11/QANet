@@ -37,7 +37,7 @@ DEFAULT_DATA_DIR = os.path.join(MAIN_DIR, "data") # relative path of data dir
 EXPERIMENTS_DIR = os.path.join(MAIN_DIR, "experiments") # relative path of experiments dir
 
 # High-level options
-tf.app.flags.DEFINE_integer("gpu", 1, "Which GPU to use, if you have multiple.")
+tf.app.flags.DEFINE_integer("gpu", 0, "Which GPU to use, if you have multiple.")
 tf.app.flags.DEFINE_string("mode", "train", "Available modes: train / show_examples / official_eval")
 tf.app.flags.DEFINE_string("reloading", "yes", "Available modes: train / show_examples / official_eval")
 tf.app.flags.DEFINE_string("experiment_name", "", "Unique name for your experiment. This will create a directory by this name in the experiments/ directory, which will hold all data related to this experiment")
@@ -55,6 +55,17 @@ tf.app.flags.DEFINE_integer("hidden_size", 96, "Size of the hidden states")
 tf.app.flags.DEFINE_integer("context_len", 600, "The maximum context length of your model")
 tf.app.flags.DEFINE_integer("question_len", 30, "The maximum question length of your model")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained word vectors. This needs to be one of the available GloVe dimensions: 50/100/200/300")
+
+# Hyperparameters for QANet
+tf.app.flags.DEFINE_integer("emb_num_blocks", 1, "Number of blocks in embedding encoder blocks")
+tf.app.flags.DEFINE_integer("emb_num_layers", 4, "Number of separable convolutional layers in embedding encoder blocks")
+tf.app.flags.DEFINE_integer("emb_num_heads", 1, "Number of heads in embedding encoder blocks")
+tf.app.flags.DEFINE_integer("emb_kernel_size", 7, "Kernel size of separable convolutional layers in embedding encoder blocks")
+tf.app.flags.DEFINE_integer("model_num_blocks", 7, "Number of blocks in model encoder blocks")
+tf.app.flags.DEFINE_integer("model_num_layers", 2, "Number of separable convolutional layers in model encoder blocks")
+tf.app.flags.DEFINE_integer("model_num_heads", 1, "Number of heads in model encoder blocks")
+tf.app.flags.DEFINE_integer("model_kernel_size", 5, "Kernel size of separable convolutional layers in model encoder blocks")
+
 
 # How often to print, save, eval
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
