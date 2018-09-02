@@ -24,7 +24,6 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import embedding_ops
 
 from evaluate import exact_match_score, f1_score
@@ -107,7 +106,7 @@ class QAModel(object):
           emb_matrix: shape (400002, embedding_size).
             The GloVe vectors, plus vectors for PAD and UNK.
         """
-        with vs.variable_scope("embeddings"):
+        with tf.variable_scope("embeddings"):
 
             # Note: the embedding matrix is a tf.constant which means it's not a trainable parameter
             embedding_matrix = tf.constant(emb_matrix, dtype=tf.float32, name="emb_matrix") # shape (400002, embedding_size)
@@ -165,27 +164,27 @@ class QAModel(object):
 
             # Use softmax layer to compute probability distribution for start location
             # Note this produces self.logits_start and self.probdist_start, both of which have shape (batch_size, context_len)
-            with vs.variable_scope("StartDist"):
+            with tf.variable_scope("StartDist"):
                 softmax_layer_start = SimpleSoftmaxLayer()
                 self.logits_start, self.probdist_start = softmax_layer_start.build_graph(blended_reps_final, self.context_mask)
 
             # Use softmax layer to compute probability distribution for end location
             # Note this produces self.logits_end and self.probdist_end, both of which have shape (batch_size, context_len)
-            with vs.variable_scope("EndDist"):
+            with tf.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(blended_reps_final, self.context_mask)
                 
         elif self.FLAGS.modeling_layer == 'rnn':
             encoder_start = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, \
-                                       cell_type=self.FLAGS.cell_type, scope='m1')
+                                       cell_type=self.FLAGS.cell_type, name='m1')
             m1 = encoder_start.build_graph(blended_reps, self.context_mask)
             encoder_end = RNNEncoder(self.FLAGS.hidden_size, self.keep_prob, \
-                                     cell_type=self.FLAGS.cell_type, scope='m2')
+                                     cell_type=self.FLAGS.cell_type, name='m2')
             m2 = encoder_end.build_graph(m1, self.context_mask)
-            with vs.variable_scope("StartDist"):
+            with tf.variable_scope("StartDist"):
                 softmax_layer_start = SimpleSoftmaxLayer()
                 self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([blended_reps, m1], -1), self.context_mask)
-            with vs.variable_scope("EndDist"):
+            with tf.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
         elif self.FLAGS.modeling_layer == 'qanet':
@@ -195,17 +194,46 @@ class QAModel(object):
                                          filters=self.FLAGS.hidden_size, \
                                          kernel_size=self.FLAGS.model_kernel_size, \
                                          keep_prob=self.keep_prob, input_mapping=False, \
-                                         scope='modeling_encoder')
-            m0 = tf.contrib.layers.fully_connected(blended_reps, num_outputs=self.FLAGS.hidden_size, activation_fn=None) # blended_reps_final is shape (batch_size, context_len, hidden_size)
+                                         name='modeling_encoder')
+            m0 = tf.layers.conv1d(blended_reps, filters=self.FLAGS.hidden_size, \
+                                  kernel_size=1, padding='SAME', name='attn_mapping')
             m1 = modeling_encoder.build_graph(m0, self.context_mask)
             m2 = modeling_encoder.build_graph(m1, self.context_mask)
             m3 = modeling_encoder.build_graph(m2, self.context_mask)
-            with vs.variable_scope("StartDist"):
+            with tf.variable_scope("StartDist"):
                 softmax_layer_start = SimpleSoftmaxLayer()
                 self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([m1, m2], -1), self.context_mask)
-            with vs.variable_scope("EndDist"):
+            with tf.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([m1, m3], -1), self.context_mask)
+                
+        elif self.FLAGS.modeling_layer == 'qanet2':
+            modeling_encoder1 = QAEncoder(num_blocks=self.FLAGS.model_num_blocks, \
+                                          num_layers=self.FLAGS.model_num_layers, \
+                                          num_heads=self.FLAGS.model_num_heads, \
+                                          filters=self.FLAGS.hidden_size, \
+                                          kernel_size=self.FLAGS.model_kernel_size, \
+                                          keep_prob=self.keep_prob, input_mapping=False, \
+                                          name='modeling_encoder1')
+            '''
+            modeling_encoder2 = QAEncoder(num_blocks=self.FLAGS.model_num_blocks, \
+                                          num_layers=self.FLAGS.model_num_layers, \
+                                          num_heads=self.FLAGS.model_num_heads, \
+                                          filters=self.FLAGS.hidden_size, \
+                                          kernel_size=self.FLAGS.model_kernel_size, \
+                                          keep_prob=self.keep_prob, input_mapping=False, \
+                                          name='modeling_encoder2')
+            '''
+            m0 = tf.layers.conv1d(blended_reps, filters=self.FLAGS.hidden_size, \
+                                  kernel_size=1, padding='SAME', name='attn_mapping')
+            m1 = modeling_encoder1.build_graph(m0, self.context_mask)
+            m2 = modeling_encoder1.build_graph(m1, self.context_mask)
+            with tf.variable_scope("StartDist"):
+                softmax_layer_start = SimpleSoftmaxLayer()
+                self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([blended_reps, m1], -1), self.context_mask)
+            with tf.variable_scope("EndDist"):
+                softmax_layer_end = SimpleSoftmaxLayer()
+                self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
 
 
     def add_loss(self):
@@ -227,7 +255,7 @@ class QAModel(object):
         Defines:
           self.loss_start, self.loss_end, self.loss: all scalar tensors
         """
-        with vs.variable_scope("loss"):
+        with tf.variable_scope("loss"):
 
             # Calculate loss for prediction of start position
             loss_start = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits_start, labels=self.ans_span[:, 0]) # loss_start has shape (batch_size)

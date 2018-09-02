@@ -19,10 +19,11 @@ import math
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops.rnn_cell import DropoutWrapper
-from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import rnn_cell
 from tensorflow.python.framework import function
 
+from tensor2tensor.layers.common_layers import layer_norm
+from tensor2tensor.layers.common_attention import add_timing_signal_1d, multihead_self_attention_memory_efficient
 
 initializer_relu = lambda: tf.contrib.layers.variance_scaling_initializer(factor=2.0, mode='FAN_IN',
                                                                           uniform=False, dtype=tf.float32)
@@ -42,13 +43,13 @@ class RNNEncoder(object):
     position in the sequence, and we'll use the encodings downstream in the model.
     """
 
-    def __init__(self, hidden_size, keep_prob, cell_type, scope='RNNEncoder'):
+    def __init__(self, hidden_size, keep_prob, cell_type, name='RNNEncoder'):
         """
         Inputs:
           hidden_size: int. Hidden size of the RNN
           keep_prob: Tensor containing a single scalar that is the keep probability (for dropout)
         """
-        self.scope = scope
+        self.name = name
         if cell_type == 'rnn_lstm':
             cell = rnn_cell.LSTMCell
         elif cell_type == 'rnn_gru':
@@ -74,7 +75,7 @@ class RNNEncoder(object):
           out: Tensor shape (batch_size, seq_len, hidden_size*2).
             This is all hidden states (fw and bw hidden states are concatenated).
         """
-        with vs.variable_scope(self.scope):
+        with tf.variable_scope(self.name):
             input_lens = tf.reduce_sum(masks, reduction_indices=1) # shape (batch_size)
 
             # Note: fw_out and bw_out are the hidden states for every timestep.
@@ -94,8 +95,8 @@ class QAEncoder(object):
     Encoder block in QANet from https://arxiv.org/abs/1804.09541
     '''
     def __init__(self, num_blocks, num_layers, num_heads, filters, kernel_size, \
-                 keep_prob, input_mapping=False, scope='QAEncoder'):
-        self.scope = scope
+                 keep_prob, input_mapping=False, name='QAEncoder'):
+        self.name = name
         self.num_blocks = num_blocks
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -105,7 +106,7 @@ class QAEncoder(object):
         self.input_mapping = input_mapping
         
     def build_graph(self, inputs, masks):
-        with tf.variable_scope(self.scope, reuse=tf.AUTO_REUSE):
+        with tf.variable_scope(self.name, reuse=tf.AUTO_REUSE):
             if self.input_mapping:
                 inputs = tf.layers.conv1d(inputs, filters=self.filters, \
                                           kernel_size=1, padding='SAME', name='input_mapping')
@@ -117,14 +118,13 @@ class QAEncoder(object):
                         with tf.variable_scope('conv{}'.format(j + 1)):
                             outputs = layer_dropout(
                                 x=outputs, 
-                                fn=lambda x:tf.nn.dropout(tf.layers.separable_conv1d(layer_norm(x, scope='ln1'), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', name='conv{}'.format(j + 1)), self.keep_prob), 
+                                fn=lambda x:tf.nn.dropout(tf.layers.separable_conv1d(layer_norm(x, name='ln1'), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', name='conv{}'.format(j + 1)), self.keep_prob), 
                                 keep_prob=1 - (j + 1) / self.num_layers * (1 - self.keep_prob))
-                    outputs = tf.nn.dropout(outputs + multihead_self_attention(layer_norm(outputs, scope='ln2'), masks, self.num_heads), self.keep_prob)
+                    outputs = tf.nn.dropout(outputs + multihead_self_attention(layer_norm(outputs, name='ln2'), masks, self.num_heads), self.keep_prob)
                     res = outputs
-                    outputs = layer_norm(outputs, scope='ln3')
-                    outputs = tf.nn.relu(tf.layers.conv1d(
-                        outputs, filters=self.filters, kernel_size=1, \
-                        padding='SAME', kernel_initializer=initializer_relu(), name='ffn1'))
+                    outputs = layer_norm(outputs, name='ln3')
+                    #outputs = tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1, padding='SAME', kernel_initializer=initializer_relu(), name='ffn1')
+                    outputs = tf.nn.relu(tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1,  padding='SAME', kernel_initializer=initializer_relu(), name='ffn1'))
                     outputs = tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1, padding='SAME', name='ffn2')
                     outputs = tf.nn.dropout(res + outputs, self.keep_prob)
             return outputs
@@ -136,8 +136,8 @@ class SimpleSoftmaxLayer(object):
     and return probability distribution over those states.
     """
 
-    def __init__(self, scope="SimpleSoftmaxLayer"):
-        self.scope = scope
+    def __init__(self, name="SimpleSoftmaxLayer"):
+        self.name = name
 
     def build_graph(self, inputs, masks):
         """
@@ -156,7 +156,7 @@ class SimpleSoftmaxLayer(object):
             The result of taking softmax over logits.
             This should have 0 in the padded locations, and the rest should sum to 1.
         """
-        with vs.variable_scope(self.scope):
+        with tf.variable_scope(self.name):
 
             # Linear downprojection layer
             logits = tf.contrib.layers.fully_connected(inputs, num_outputs=1, activation_fn=None) # shape (batch_size, seq_len, 1)
@@ -183,14 +183,14 @@ class BasicAttn(object):
     module with other inputs.
     """
 
-    def __init__(self, keep_prob, key_vec_size, value_vec_size, scope="BasicAttn"):
+    def __init__(self, keep_prob, key_vec_size, value_vec_size, name="BasicAttn"):
         """
         Inputs:
           keep_prob: tensor containing a single scalar that is the keep probability (for dropout)
           key_vec_size: size of the key vectors. int
           value_vec_size: size of the value vectors. int
         """
-        self.scope = scope
+        self.name = name
         self.keep_prob = keep_prob
         self.key_vec_size = key_vec_size
         self.value_vec_size = value_vec_size
@@ -214,7 +214,7 @@ class BasicAttn(object):
             This is the attention output; the weighted sum of the values
             (using the attention distribution as weights).
         """
-        with vs.variable_scope(self.scope):
+        with tf.variable_scope(self.name):
 
             # Calculate attention distribution
             values_t = tf.transpose(values, perm=[0, 2, 1]) # (batch_size, value_vec_size, num_values)
@@ -234,12 +234,12 @@ class BasicAttn(object):
 class BiDAFAttn(object):
     '''Module for BiDAF attention cell from https://arxiv.org/abs/1611.01603
     '''
-    def __init__(self, keep_prob=1.0, scope='BiDAFAttn'):
-        self.scope = scope
+    def __init__(self, keep_prob=1.0, name='BiDAFAttn'):
+        self.name = name
         self.keep_prob = keep_prob
         
     def build_graph(self, c, c_mask, q, q_mask):
-        with tf.variable_scope(self.scope):
+        with tf.variable_scope(self.name):
             S = trilinear_similarity(c, q)
             _, alpha = masked_softmax(S, tf.expand_dims(q_mask, 1), 2)
             a = tf.matmul(alpha, q)
@@ -274,13 +274,13 @@ def masked_softmax(logits, mask, axis=-1):
     prob_dist = tf.nn.softmax(masked_logits, axis)
     return masked_logits, prob_dist
 
-def trilinear_similarity(c, q, scope='trilinear_similarity'):
+def trilinear_similarity(c, q, name='trilinear_similarity'):
     '''
     Calculate trilinear similarity matrix from https://arxiv.org/abs/1611.01603
     '''
     c_shape, q_shape = c.get_shape().as_list(), q.get_shape().as_list()
     c_len, q_len, h = c_shape[1], q_shape[1], c_shape[2]
-    with tf.variable_scope(scope):
+    with tf.variable_scope(name):
         w_c = tf.get_variable('w_c', [h, 1], dtype=tf.float32)
         w_q = tf.get_variable('w_q', [h, 1], dtype=tf.float32)
         w_cq = tf.get_variable('w_cq', [1, 1, h], dtype=tf.float32)
@@ -328,132 +328,6 @@ def layer_dropout(x, fn, keep_prob):
                    lambda: x + fn(x) / keep_prob,
                    lambda: x)
     
-        
-def get_timing_signal_1d(length, channels, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
-    '''
-    Gets a bunch of sinusoids of different frequencies.
-    Copied from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
-    '''
-    position = tf.to_float(tf.range(length) + start_index)
-    num_timescales = channels // 2
-    log_timescale_increment = (
-        math.log(float(max_timescale) / float(min_timescale)) /
-        (tf.to_float(num_timescales) - 1))
-    inv_timescales = min_timescale * tf.exp(
-        tf.to_float(tf.range(num_timescales)) * -log_timescale_increment)
-    scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(inv_timescales, 0)
-    signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
-    signal = tf.pad(signal, [[0, 0], [0, tf.mod(channels, 2)]])
-    signal = tf.reshape(signal, [1, length, channels])
-    return signal
-    
-
-def add_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4, start_index=0):
-    '''
-    Adds a bunch of sinusoids of different frequencies to a Tensor.
-    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
-    '''
-    length = x.get_shape().as_list()[1]
-    channels = x.get_shape().as_list()[2]
-    signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale, start_index)
-    return x + signal
-
-def layer_norm_vars(filters):
-    """
-    Create Variables for layer norm.
-    Copied from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
-    """
-    scale = tf.get_variable("layer_norm_scale", [filters], initializer=tf.ones_initializer())
-    bias = tf.get_variable( "layer_norm_bias", [filters], initializer=tf.zeros_initializer())
-    return scale, bias
-
-
-def layer_norm_compute_python(x, epsilon, scale, bias):
-    """Layer norm raw computation.
-    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
-    """
-    # epsilon, scale, bias = [cast_like(t, x) for t in [epsilon, scale, bias]]
-    mean = tf.reduce_mean(x, axis=[-1], keepdims=True)
-    variance = tf.reduce_mean(tf.square(x - mean), axis=[-1], keepdims=True)
-    norm_x = (x - mean) * tf.rsqrt(variance + epsilon)
-    return norm_x * scale + bias
-
-def layer_norm(x, filters=None, epsilon=1e-6, scope='layer_norm', reuse=None):
-    """Layer normalize the tensor x, averaging over the last dimension.
-    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
-    """
-    if filters is None:
-        filters = x.get_shape().as_list()[-1]
-    with tf.variable_scope(scope, values=[x], reuse=reuse):
-        scale = tf.get_variable("layer_norm_scale", [filters], initializer=tf.ones_initializer())
-        bias = tf.get_variable("layer_norm_bias", [filters], initializer=tf.zeros_initializer())
-        result = layer_norm_compute_python(x, epsilon, scale, bias)
-        return result
-
-def scaled_dot_product_attention_simple(q, k, v, bias, scope='scaled_dot_product_attention_simple'):
-    '''Scaled dot-product attention. One head. One spatial dimension.
-    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
-    '''
-    with tf.variable_scope(scope):
-        scalar = tf.rsqrt(tf.to_float(q.get_shape().as_list()[2]))
-        logits = tf.matmul(q * scalar, k, transpose_b=True)
-        if bias is not None:
-            logits += bias
-        weights = tf.nn.softmax(logits, name='attention_weights')
-        return tf.matmul(weights, v)
-
-"""
-def multihead_self_attention(x, mask, num_heads, head_size=None, bias=None, epsilon=1e-6,
-                             scope='multihead_self_attention'):
-    '''Multihead scaled-dot-product self-attention.
-    
-    Includes layer norm.
-    
-    Returns multihead-self-attention(layer_norm(x))
-    
-    Adapted from https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
-    '''
-    io_size = x.get_shape().as_list()[-1]
-    if head_size is None:
-        assert io_size % num_heads == 0
-        head_size = io_size // num_heads
-        
-    def forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
-        n = layer_norm_compute_python(x, epsilon, norm_scale, norm_bias)
-        wqkv_split = tf.unstack(wqkv, num=num_heads)
-        wo_split = tf.unstack(wo, num=num_heads)
-        y = 0
-        for h in range(num_heads):
-            with tf.control_dependencies([y] if h > 0 else []):
-                combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
-                q, k, v = tf.split(combined, 3, axis=2)
-                o = scaled_dot_product_attention_simple(q, k, v, attention_bias, mask)
-                y += tf.nn.conv1d(o, wo_split[h], 1, "SAME")
-        return y
-    
-    forward_fn = forward_internal
-    
-    with tf.variable_scope(scope, values=[x]):
-        wqkv = tf.get_variable('wqkv', [num_heads, 1, io_size, 3 * head_size],
-                               initializer=tf.random_normal_initializer(stddev=io_size**-0.5))
-        wo = tf.get_variable('wo', [num_heads, 1, head_size, io_size],
-                             initializer=tf.random_normal_initializer(stddev=(head_size * num_heads)**-0.5))
-        norm_scale, norm_bias = layer_norm_vars(io_size)
-        y = forward_fn(x, wqkv, wo, bias, norm_scale, norm_bias)
-        y.set_shape(x.get_shape())
-        return y
-
-def separable_conv1d(inputs, filters, kernel_size, padding, scope='conv1d'):
-    _, length, channels = inputs.get_shape().as_list()
-    inputs = tf.expand_dims(inputs, 2)
-    with tf.variable_scope(scope):
-        depthwise_filter = tf.get_variable('depthwise_filter', [kernel_size, 1, channels, 1], dtype=tf.float32)
-        pointwise_filter = tf.get_variable('pointwise_filter', [1, 1, channels, filters], dtype=tf.float32)
-        outputs = tf.nn.separable_conv2d(inputs, depthwise_filter, pointwise_filter, \
-                                         strides=[1, 1, 1, 1], padding=padding)
-        return tf.squeeze(outputs, 2)
-"""
-
 def attention_bias_ignore_padding(mask):
     '''Create an bias tensor to be added to attention logits.
     
@@ -462,10 +336,8 @@ def attention_bias_ignore_padding(mask):
     ret = (1 - tf.cast(mask, 'float')) * (-1e9)
     return tf.expand_dims(tf.expand_dims(ret, axis=1), axis=1)
 
-_function_cache = {}
-
-def multihead_self_attention(x, mask, num_heads, head_size=None, bias=True, epsilon=1e-6, forget=False,
-                             scope='multihead_self_attention'):
+def multihead_self_attention(x, mask, num_heads, head_size=None, bias=True, epsilon=1e-6, forget=True,
+                             name='multihead_self_attention'):
     '''Multihead scaled-dot-product self-attention.
     
     Includes layer norm.
@@ -476,83 +348,7 @@ def multihead_self_attention(x, mask, num_heads, head_size=None, bias=True, epsi
     '''
     if bias:
         bias = attention_bias_ignore_padding(mask)
-    io_size = x.get_shape().as_list()[-1]
-    if head_size is None:
-        assert io_size % num_heads == 0
-        head_size = io_size // num_heads
-
-    def forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
-        """Forward function."""
-        n = layer_norm_compute_python(x, epsilon, norm_scale, norm_bias)
-        wqkv_split = tf.unstack(wqkv, num=num_heads)
-        wo_split = tf.unstack(wo, num=num_heads)
-        y = 0
-        for h in range(num_heads):
-            with tf.control_dependencies([y] if h > 0 else []):
-                combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
-                q, k, v = tf.split(combined, 3, axis=2)
-                o = scaled_dot_product_attention_simple(q, k, v, attention_bias)
-                y += tf.nn.conv1d(o, wo_split[h], 1, "SAME")
-        return y
-    
-    key = ("multihead_self_attention_memory_efficient %s %s" % (num_heads, epsilon))
-    
-    if not forget:
-        forward_fn = forward_internal
-    elif key in _function_cache:
-        forward_fn = _function_cache[key]
-    else:
-        @function.Defun(compiled=True)
-        def grad_fn(x, wqkv, wo, attention_bias, norm_scale, norm_bias, dy):
-            """Custom gradient function."""
-            with tf.control_dependencies([dy]):
-                n = layer_norm_compute_python(x, epsilon, norm_scale, norm_bias)
-                wqkv_split = tf.unstack(wqkv, num=num_heads)
-                wo_split = tf.unstack(wo, num=num_heads)
-                deps = []
-                dwqkvs = []
-                dwos = []
-                dn = 0
-                for h in range(num_heads):
-                    with tf.control_dependencies(deps):
-                        combined = tf.nn.conv1d(n, wqkv_split[h], 1, "SAME")
-                        q, k, v = tf.split(combined, 3, axis=2)
-                        o = scaled_dot_product_attention_simple(q, k, v, attention_bias)
-                        partial_y = tf.nn.conv1d(o, wo_split[h], 1, "SAME")
-                        pdn, dwqkvh, dwoh = tf.gradients(
-                            ys=[partial_y],
-                            xs=[n, wqkv_split[h], wo_split[h]],
-                            grad_ys=[dy])
-                        dn += pdn
-                        dwqkvs.append(dwqkvh)
-                        dwos.append(dwoh)
-                        deps = [dn, dwqkvh, dwoh]
-                dwqkv = tf.stack(dwqkvs)
-                dwo = tf.stack(dwos)
-                with tf.control_dependencies(deps):
-                    dx, dnorm_scale, dnorm_bias = tf.gradients(
-                        ys=[n], xs=[x, norm_scale, norm_bias], grad_ys=[dn])
-                return (dx, dwqkv, dwo, tf.zeros_like(attention_bias), dnorm_scale,
-                        dnorm_bias)
-
-        @function.Defun(
-            grad_func=grad_fn, compiled=True, separate_compiled_gradients=True)
-        def forward_fn(x, wqkv, wo, attention_bias, norm_scale, norm_bias):
-            return forward_internal(x, wqkv, wo, attention_bias, norm_scale, norm_bias)
-
-        _function_cache[key] = forward_fn
-
-    if bias is not None:
-        bias = tf.squeeze(bias, 1)
-    with tf.variable_scope(scope, values=[x]):
-        wqkv = tf.get_variable(
-            "wqkv", [num_heads, 1, io_size, 3 * head_size],
-            initializer=tf.random_normal_initializer(stddev=io_size**-0.5))
-        wo = tf.get_variable(
-            "wo", [num_heads, 1, head_size, io_size],
-            initializer=tf.random_normal_initializer(
-                stddev=(head_size * num_heads)**-0.5))
-        norm_scale, norm_bias = layer_norm_vars(io_size)
-        y = forward_fn(x, wqkv, wo, bias, norm_scale, norm_bias)
-        y.set_shape(x.get_shape())
-        return y
+    y = multihead_self_attention_memory_efficient(x=x, bias=bias, num_heads=num_heads, \
+                                                  head_size=head_size, epsilon=epsilon, \
+                                                  forget=forget, name=name)
+    return y
