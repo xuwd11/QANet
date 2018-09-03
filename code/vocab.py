@@ -20,6 +20,7 @@ from __future__ import division
 
 from tqdm import tqdm
 import numpy as np
+import json
 
 _PAD = b"<pad>"
 _UNK = b"<unk>"
@@ -27,6 +28,11 @@ _START_VOCAB = [_PAD, _UNK]
 PAD_ID = 0
 UNK_ID = 1
 
+def data_from_json(filename):
+    """Loads JSON data from filename and returns"""
+    with open(filename) as data_file:
+        data = json.load(data_file)
+    return data
 
 def get_glove(glove_path, glove_dim):
     """Reads from original GloVe .txt file and returns embedding matrix and
@@ -82,3 +88,24 @@ def get_glove(glove_path, glove_dim):
     assert idx == final_vocab_size
 
     return emb_matrix, word2id, id2word
+
+def get_char_emb_matrix(path, dim, freq_limit=5):
+    print('Loading character vocabulary from file {}'.format(path))
+    print('Minimum frequency of characters: {}'.format(freq_limit))
+    char_counter = data_from_json(path)
+    chars = [c for c, v in char_counter.items() if v >= freq_limit]
+    final_vocab_size = len(_START_VOCAB) + len(chars)
+    print('Final character vocabulary size (including UNK and PAD): {}'.format(final_vocab_size))
+    
+    emb_matrix = np.random.randn(final_vocab_size, dim)
+    char2id = {c: i + len(_START_VOCAB) for i, c in enumerate(chars)}
+    id2char = {i + len(_START_VOCAB): c for i, c in enumerate(chars)}
+    
+    for i, token in enumerate(_START_VOCAB):
+        char2id[token] = i
+        id2char[i] = token
+        
+    assert len(char2id) == final_vocab_size
+    assert len(id2char) == final_vocab_size
+    
+    return emb_matrix, char2id, id2char

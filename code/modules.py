@@ -352,3 +352,5 @@ def multihead_self_attention(x, mask, num_heads, head_size=None, bias=True, epsi
                                                   head_size=head_size, epsilon=epsilon, \
                                                   forget=forget, name=name)
     return y
+
+

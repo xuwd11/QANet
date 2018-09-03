@@ -110,7 +110,13 @@ class QAModel(object):
 
             # Note: the embedding matrix is a tf.constant which means it's not a trainable parameter
             embedding_matrix = tf.constant(emb_matrix, dtype=tf.float32, name="emb_matrix") # shape (400002, embedding_size)
-
+            if self.FLAGS.emb_matrix_trainable == 'yes':
+                embedding_matrix = tf.get_variable('embedding_matrix', initializer=embedding_matrix)
+            elif self.FLAGS.unk_pad_trainable == 'yes':
+                embedding_matrix = tf.concat(
+                    [tf.get_variable('unk_pad', initializer=embedding_matrix[:2, :]), \
+                     embedding_matrix[2:, :]], axis=0)
+            
             # Get the word embeddings for the context and question,
             # using the placeholders self.context_ids and self.qn_ids
             self.context_embs = embedding_ops.embedding_lookup(embedding_matrix, self.context_ids) # shape (batch_size, context_len, embedding_size)
@@ -187,6 +193,7 @@ class QAModel(object):
             with tf.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
                 self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
+                
         elif self.FLAGS.modeling_layer == 'qanet':
             modeling_encoder = QAEncoder(num_blocks=self.FLAGS.model_num_blocks, \
                                          num_layers=self.FLAGS.model_num_layers, \
@@ -230,10 +237,10 @@ class QAModel(object):
             m2 = modeling_encoder1.build_graph(m1, self.context_mask)
             with tf.variable_scope("StartDist"):
                 softmax_layer_start = SimpleSoftmaxLayer()
-                self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([blended_reps, m1], -1), self.context_mask)
+                self.logits_start, self.probdist_start = softmax_layer_start.build_graph(tf.concat([m0, m1], -1), self.context_mask)
             with tf.variable_scope("EndDist"):
                 softmax_layer_end = SimpleSoftmaxLayer()
-                self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([blended_reps, m2], -1), self.context_mask)
+                self.logits_end, self.probdist_end = softmax_layer_end.build_graph(tf.concat([m0, m2], -1), self.context_mask)
 
 
     def add_loss(self):

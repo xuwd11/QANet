@@ -26,7 +26,7 @@ import logging
 import tensorflow as tf
 
 from qa_model import QAModel
-from vocab import get_glove
+from vocab import get_glove, get_char_emb_matrix
 from official_eval_helper import get_json_data, generate_answers
 
 
@@ -37,7 +37,7 @@ DEFAULT_DATA_DIR = os.path.join(MAIN_DIR, "data") # relative path of data dir
 EXPERIMENTS_DIR = os.path.join(MAIN_DIR, "experiments") # relative path of experiments dir
 
 # High-level options
-tf.app.flags.DEFINE_integer("gpu", 0, "Which GPU to use, if you have multiple.")
+tf.app.flags.DEFINE_integer("gpu", 1, "Which GPU to use, if you have multiple.")
 tf.app.flags.DEFINE_string("mode", "train", "Available modes: train / show_examples / official_eval")
 tf.app.flags.DEFINE_string("reloading", "yes", "Available modes: train / show_examples / official_eval")
 tf.app.flags.DEFINE_string("experiment_name", "", "Unique name for your experiment. This will create a directory by this name in the experiments/ directory, which will hold all data related to this experiment")
@@ -48,13 +48,23 @@ tf.app.flags.DEFINE_string("modeling_layer", "qanet2", "Modeling layer and outpu
 
 # Hyperparameters
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
-tf.app.flags.DEFINE_float("max_gradient_norm", 5.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.1, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
+tf.app.flags.DEFINE_float("dropout", 0.3, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 32, "Batch size to use")
-tf.app.flags.DEFINE_integer("hidden_size", 128, "Size of the hidden states")
+tf.app.flags.DEFINE_integer("hidden_size", 16, "Size of the hidden states")
+
+# Embedding options and hyperparameters
+# Word embedding
 tf.app.flags.DEFINE_integer("context_len", 600, "The maximum context length of your model")
 tf.app.flags.DEFINE_integer("question_len", 30, "The maximum question length of your model")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained word vectors. This needs to be one of the available GloVe dimensions: 50/100/200/300")
+tf.app.flags.DEFINE_string("emb_matrix_trainable", "no", "Whether word vector is trainable")
+tf.app.flags.DEFINE_string("unk_pad_trainable", "yes", "Whether word vector is trainable")
+# Character embedding
+tf.app.flags.DEFINE_string("use_char_emb", "yes", "Whether word vector is trainable")
+tf.app.flags.DEFINE_integer("word_len", 16, "The maximum word length of your model")
+tf.app.flags.DEFINE_integer("char_embedding_size", 32, "Size of character vectors")
+tf.app.flags.DEFINE_integer("char_freq_limit", -1, "The minimum frequency of characters in the training set to be included in the character vocabulary")
 
 # Hyperparameters for QANet
 tf.app.flags.DEFINE_integer("emb_num_blocks", 1, "Number of blocks in embedding encoder blocks")
@@ -62,7 +72,7 @@ tf.app.flags.DEFINE_integer("emb_num_layers", 4, "Number of separable convolutio
 tf.app.flags.DEFINE_integer("emb_num_heads", 4, "Number of heads in embedding encoder blocks")
 tf.app.flags.DEFINE_integer("emb_kernel_size", 7, "Kernel size of separable convolutional layers in embedding encoder blocks")
 tf.app.flags.DEFINE_integer("model_num_blocks", 1, "Number of blocks in model encoder blocks")
-tf.app.flags.DEFINE_integer("model_num_layers", 4, "Number of separable convolutional layers in model encoder blocks")
+tf.app.flags.DEFINE_integer("model_num_layers", 2, "Number of separable convolutional layers in model encoder blocks")
 tf.app.flags.DEFINE_integer("model_num_heads", 4, "Number of heads in model encoder blocks")
 tf.app.flags.DEFINE_integer("model_kernel_size", 5, "Kernel size of separable convolutional layers in model encoder blocks")
 
@@ -150,6 +160,13 @@ def main(unused_argv):
 
     # Load embedding matrix and vocab mappings
     emb_matrix, word2id, id2word = get_glove(FLAGS.glove_path, FLAGS.embedding_size)
+    
+    # Initializer character embedding matrix and vocab mappings
+    char_emb_matrix, char2id, id2char = None, None, None
+    if FLAGS.use_char_emb == 'yes':
+        char_vocab_path = os.path.join(DEFAULT_DATA_DIR, 'char_vocab.json')
+        char_emb_matrix, char2id, id2char = get_char_emb_matrix(
+            char_vocab_path, FLAGS.char_embedding_size, FLAGS.char_freq_limit)
 
     # Get filepaths to train/dev datafiles for tokenized queries, contexts and answers
     train_context_path = os.path.join(FLAGS.data_dir, "train.context")
