@@ -240,8 +240,8 @@ def get_batch_generator(word2id, char2id, context_path, qn_path, ans_path, batch
 
         # Make ans_span into a np array
         ans_span = np.array(ans_span) # shape (batch_size, 2)
-        
-        if word2id is not None:
+
+        if char2id is not None:
             context_char_ids = np.array(padded_char(context_char_ids, word_len, context_len)) # shape (batch_size, context_len, word_len)
             qn_char_ids = np.array(padded_char(qn_char_ids, word_len, question_len)) # shape (batch_size, question_len, word_len)
         

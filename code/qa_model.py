@@ -94,6 +94,12 @@ class QAModel(object):
         self.qn_ids = tf.placeholder(tf.int32, shape=[None, self.FLAGS.question_len])
         self.qn_mask = tf.placeholder(tf.int32, shape=[None, self.FLAGS.question_len])
         self.ans_span = tf.placeholder(tf.int32, shape=[None, 2])
+        
+        if self.FLAGS.use_char_emb == 'yes':
+            self.context_char_ids = tf.placeholder(
+                tf.int32, shape=[None, self.FLAGS.context_len, self.FLAGS.word_len])
+            self.qn_char_ids = tf.placeholder(
+                tf.int32, shape=[None, self.FLAGS.question_len, self.FLAGS.word_len])
 
         # Add a placeholder to feed in the keep probability (for dropout).
         # This is necessary so that we can instruct the model to use dropout when training, but not when testing
@@ -304,6 +310,10 @@ class QAModel(object):
         input_feed[self.qn_mask] = batch.qn_mask
         input_feed[self.ans_span] = batch.ans_span
         input_feed[self.keep_prob] = 1.0 - self.FLAGS.dropout # apply dropout
+        
+        if self.FLAGS.use_char_emb == 'yes':
+            input_feed[self.context_char_ids] = batch.context_char_ids
+            input_feed[self.qn_char_ids] = batch.qn_char_ids
         
         # output_feed contains the things we want to fetch.
         output_feed = [self.updates, self.summaries, self.loss, self.global_step, self.param_norm, self.gradient_norm]
