@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO)
 class QAModel(object):
     """Top-level Question Answering module"""
 
-    def __init__(self, FLAGS, id2word, word2id, emb_matrix):
+    def __init__(self, FLAGS, id2word, word2id, emb_matrix, char_emb_matrix, char2id, id2char):
         """
         Initializes the QA model.
 
@@ -51,11 +51,13 @@ class QAModel(object):
         self.FLAGS = FLAGS
         self.id2word = id2word
         self.word2id = word2id
+        self.char2id = char2id
+        self.id2char = id2char
 
         # Add all parts of the graph
         with tf.variable_scope("QAModel", initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True), regularizer=tf.contrib.layers.l2_regularizer(scale=3e-7)):
             self.add_placeholders()
-            self.add_embedding_layer(emb_matrix)
+            self.add_embedding_layer(emb_matrix, char_emb_matrix)
             self.build_graph()
             self.add_loss()
 
@@ -98,7 +100,7 @@ class QAModel(object):
         self.keep_prob = tf.placeholder_with_default(1.0, shape=())
 
 
-    def add_embedding_layer(self, emb_matrix):
+    def add_embedding_layer(self, emb_matrix, char_emb_matrix):
         """
         Adds word embedding layer to the graph.
 

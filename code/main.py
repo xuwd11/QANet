@@ -177,7 +177,7 @@ def main(unused_argv):
     dev_ans_path = os.path.join(FLAGS.data_dir, "dev.span")
 
     # Initialize model
-    qa_model = QAModel(FLAGS, id2word, word2id, emb_matrix)
+    qa_model = QAModel(FLAGS, id2word, word2id, emb_matrix, char_emb_matrix, char2id, id2char)
 
     # Some GPU settings
     config=tf.ConfigProto()
