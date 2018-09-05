@@ -24,12 +24,11 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import embedding_ops
 
 from evaluate import exact_match_score, f1_score
 from data_batcher import get_batch_generator
 from pretty_print import print_example
-from modules import RNNEncoder, QAEncoder, SimpleSoftmaxLayer, BasicAttn, BiDAFAttn, initializer_relu, max_product_span
+from modules import RNNEncoder, QAEncoder, SimpleSoftmaxLayer, BasicAttn, BiDAFAttn, initializer_relu, max_product_span, highway
 
 logging.basicConfig(level=logging.INFO)
 
@@ -37,7 +36,7 @@ logging.basicConfig(level=logging.INFO)
 class QAModel(object):
     """Top-level Question Answering module"""
 
-    def __init__(self, FLAGS, id2word, word2id, emb_matrix, char_emb_matrix, char2id, id2char):
+    def __init__(self, FLAGS, id2word, word2id, emb_matrix, id2char, char2id, char_emb_matrix):
         """
         Initializes the QA model.
 
@@ -55,7 +54,7 @@ class QAModel(object):
         self.id2char = id2char
 
         # Add all parts of the graph
-        with tf.variable_scope("QAModel", initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True), regularizer=tf.contrib.layers.l2_regularizer(scale=3e-7)):
+        with tf.variable_scope("QAModel", initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True), regularizer=tf.contrib.layers.l2_regularizer(scale=3e-7), reuse=tf.AUTO_REUSE):
             self.add_placeholders()
             self.add_embedding_layer(emb_matrix, char_emb_matrix)
             self.build_graph()
@@ -114,7 +113,7 @@ class QAModel(object):
           emb_matrix: shape (400002, embedding_size).
             The GloVe vectors, plus vectors for PAD and UNK.
         """
-        with tf.variable_scope("embeddings"):
+        with tf.variable_scope("embeddings", reuse=tf.AUTO_REUSE):
 
             # Note: the embedding matrix is a tf.constant which means it's not a trainable parameter
             embedding_matrix = tf.constant(emb_matrix, dtype=tf.float32, name="emb_matrix") # shape (400002, embedding_size)
@@ -127,9 +126,42 @@ class QAModel(object):
             
             # Get the word embeddings for the context and question,
             # using the placeholders self.context_ids and self.qn_ids
-            self.context_embs = embedding_ops.embedding_lookup(embedding_matrix, self.context_ids) # shape (batch_size, context_len, embedding_size)
-            self.qn_embs = embedding_ops.embedding_lookup(embedding_matrix, self.qn_ids) # shape (batch_size, question_len, embedding_size)
-
+            self.context_embs = tf.nn.embedding_lookup(embedding_matrix, self.context_ids) 
+            # shape (batch_size, context_len, embedding_size)
+            self.qn_embs = tf.nn.embedding_lookup(embedding_matrix, self.qn_ids) 
+            # shape (batch_size, question_len, embedding_size)
+            
+            if self.FLAGS.use_char_emb == 'yes':
+                char_embedding_matrix = tf.constant(char_emb_matrix, dtype=tf.float32, name='char_emb_matrix')
+                char_embedding_matrix = tf.get_variable('char_emb_matrix', initializer=char_embedding_matrix)
+                self.context_char_embs = tf.nn.embedding_lookup(char_embedding_matrix, self.context_char_ids)
+                # shape (batch_size, context_len, word_len, char_embedding_size)
+                self.qn_char_embs = tf.nn.embedding_lookup(char_embedding_matrix, self.qn_char_ids)
+                # shape (batch_size, question_len, word_len, char_embedding_size)
+                if self.FLAGS.char_kernel_size > 0:
+                    self.context_char_embs = tf.layers.separable_conv2d(
+                        self.context_char_embs, filters=self.FLAGS.embedding_size, 
+                        kernel_size=[self.FLAGS.char_kernel_size, 1],
+                        padding='SAME', name='char_conv')
+                    self.qn_char_embs = tf.layers.separable_conv2d(
+                        self.qn_char_embs, filters=self.FLAGS.embedding_size, 
+                        kernel_size=[self.FLAGS.char_kernel_size, 1],
+                        padding='SAME', name='char_conv')
+                self.context_char_embs = tf.reduce_max(self.context_char_embs, axis=2)
+                # shape (batch_size, context_len, char_embedding_size/embedding_size)
+                self.qn_char_embs = tf.reduce_max(self.qn_char_embs, axis=2)
+                # shape (batch_size, question_len, char_embedding_size/embedding_size)
+                self.context_char_embs = tf.nn.dropout(self.context_char_embs, self.keep_prob)
+                self.qn_char_embs = tf.nn.dropout(self.qn_char_embs, self.keep_prob)
+                
+                self.context_embs = tf.concat([self.context_embs, self.context_char_embs], axis=2)
+                self.qn_embs = tf.concat([self.qn_embs, self.qn_char_embs], axis=2)
+                
+                self.context_embs = highway(self.context_embs, self.FLAGS.embedding_size * 2, 
+                                            keep_prob=self.keep_prob, name='highway')
+                self.qn_embs = highway(self.qn_embs, self.FLAGS.embedding_size * 2, 
+                                       keep_prob=self.keep_prob, name='highway')
+                
 
     def build_graph(self):
         """Builds the main part of the graph for the model, starting from the input embeddings to the final distributions for the answer span.
@@ -345,7 +377,11 @@ class QAModel(object):
         input_feed[self.qn_ids] = batch.qn_ids
         input_feed[self.qn_mask] = batch.qn_mask
         input_feed[self.ans_span] = batch.ans_span
+        if self.FLAGS.use_char_emb == 'yes':
+            input_feed[self.context_char_ids] = batch.context_char_ids
+            input_feed[self.qn_char_ids] = batch.qn_char_ids
         # note you don't supply keep_prob here, so it will default to 1 i.e. no dropout
+        
 
         output_feed = [self.loss]
 
@@ -370,6 +406,9 @@ class QAModel(object):
         input_feed[self.context_mask] = batch.context_mask
         input_feed[self.qn_ids] = batch.qn_ids
         input_feed[self.qn_mask] = batch.qn_mask
+        if self.FLAGS.use_char_emb == 'yes':
+            input_feed[self.context_char_ids] = batch.context_char_ids
+            input_feed[self.qn_char_ids] = batch.qn_char_ids
         # note you don't supply keep_prob here, so it will default to 1 i.e. no dropout
 
         output_feed = [self.probdist_start, self.probdist_end]

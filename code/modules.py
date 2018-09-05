@@ -354,3 +354,14 @@ def multihead_self_attention(x, mask, num_heads, head_size=None, bias=True, epsi
     return y
 
 
+def highway(x, num_outputs=None, num_layers=2, activation=tf.nn.relu, keep_prob=1.0, name='highway'):
+    with tf.variable_scope(name):
+        if num_outputs is None:
+            num_outputs = x.shape.as_list()[-1]
+        for i in range(num_layers):
+            T = tf.layers.conv1d(x, num_outputs, kernel_size=1, padding='SAME', 
+                                 activation=tf.sigmoid, name='gate{}'.format(i))
+            H = tf.layers.conv1d(x, num_outputs, kernel_size=1, padding='SAME',
+                                 activation=activation, name='output{}'.format(i))
+            x = tf.nn.dropout(H * T + x * (1.0 - T), keep_prob)
+    return x

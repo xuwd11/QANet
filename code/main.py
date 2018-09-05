@@ -44,27 +44,28 @@ tf.app.flags.DEFINE_string("experiment_name", "", "Unique name for your experime
 tf.app.flags.DEFINE_integer("num_epochs", 0, "Number of epochs to train. 0 means train indefinitely")
 tf.app.flags.DEFINE_string("attention", "bidaf", "Attention mechanism to use")
 tf.app.flags.DEFINE_string("cell_type", "qanet", "Type of encoder to use")
-tf.app.flags.DEFINE_string("modeling_layer", "qanet2", "Modeling layer and output layer to use")
+tf.app.flags.DEFINE_string("modeling_layer", "qanet", "Modeling layer and output layer to use")
 
 # Hyperparameters
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.2, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.1, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 32, "Batch size to use")
 tf.app.flags.DEFINE_integer("hidden_size", 128, "Size of the hidden states")
 
 # Embedding options and hyperparameters
 # Word embedding
-tf.app.flags.DEFINE_integer("context_len", 600, "The maximum context length of your model")
-tf.app.flags.DEFINE_integer("question_len", 30, "The maximum question length of your model")
+tf.app.flags.DEFINE_integer("context_len", 600, "The maximum context length of the model")
+tf.app.flags.DEFINE_integer("question_len", 30, "The maximum question length of the model")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained word vectors. This needs to be one of the available GloVe dimensions: 50/100/200/300")
 tf.app.flags.DEFINE_string("emb_matrix_trainable", "no", "Whether word vector is trainable")
 tf.app.flags.DEFINE_string("unk_pad_trainable", "yes", "Whether word vector is trainable")
 # Character embedding
-tf.app.flags.DEFINE_string("use_char_emb", "no", "Whether word vector is trainable")
-tf.app.flags.DEFINE_integer("word_len", 16, "The maximum word length of your model")
-tf.app.flags.DEFINE_integer("char_embedding_size", 32, "Size of character vectors")
+tf.app.flags.DEFINE_string("use_char_emb", "yes", "Whether to use character embeddings")
+tf.app.flags.DEFINE_integer("word_len", 16, "The maximum word length of the model")
+tf.app.flags.DEFINE_integer("char_embedding_size", 100, "Size of character vectors")
 tf.app.flags.DEFINE_integer("char_freq_limit", -1, "The minimum frequency of characters in the training set to be included in the character vocabulary")
+tf.app.flags.DEFINE_integer("char_kernel_size", 5, "The kernel size of character CNN")
 
 # Hyperparameters for QANet
 tf.app.flags.DEFINE_integer("emb_num_blocks", 1, "Number of blocks in embedding encoder blocks")
@@ -127,9 +128,9 @@ def main(unused_argv):
     if len(unused_argv) != 1:
         raise Exception("There is a problem with how you entered flags: %s" % unused_argv)
 
-    # Check for Python 2 (It has been adapted to Python 3)
-    #if sys.version_info[0] != 2:
-        #raise Exception("ERROR: You must use Python 2 but you are running Python %i" % sys.version_info[0])
+    # Check for Python 3
+    if sys.version_info[0] != 3:
+        raise Exception("ERROR: You must use Python 3 but you are running Python %i" % sys.version_info[0])
 
     # Print out Tensorflow version
     print("This code was tested on TensorFlow 1.8.0. Your TensorFlow version: %s" % tf.__version__)
@@ -177,7 +178,7 @@ def main(unused_argv):
     dev_ans_path = os.path.join(FLAGS.data_dir, "dev.span")
 
     # Initialize model
-    qa_model = QAModel(FLAGS, id2word, word2id, emb_matrix, char_emb_matrix, char2id, id2char)
+    qa_model = QAModel(FLAGS, id2word, word2id, emb_matrix, id2char, char2id, char_emb_matrix)
 
     # Some GPU settings
     config=tf.ConfigProto()
@@ -236,7 +237,7 @@ def main(unused_argv):
 
             # Get a predicted answer for each example in the data
             # Return a mapping answers_dict from uuid to answer
-            answers_dict = generate_answers(sess, qa_model, word2id, qn_uuid_data, context_token_data, qn_token_data)
+            answers_dict = generate_answers(sess, qa_model, word2id, char2id, qn_uuid_data, context_token_data, qn_token_data)
 
             # Write the uuid->answer mapping a to json file in root dir
             print("Writing predictions to %s..." % FLAGS.json_out_path)
