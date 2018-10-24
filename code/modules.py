@@ -116,13 +116,17 @@ class QAEncoder(object):
                     outputs = add_timing_signal_1d(outputs)
                     for j in range(self.num_layers):
                         with tf.variable_scope('conv{}'.format(j + 1)):
+                            def fn(x):
+                                output = tf.layers.separable_conv1d(layer_norm(x, name='ln1_{}'.format(j + 1)), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', name='conv{}'.format(j + 1))
+                                if j % 2 == 0:
+                                    output = tf.nn.dropout(output, self.keep_prob)
+                                return output
                             outputs = layer_dropout(
-                                x=outputs, 
-                                fn=lambda x:tf.nn.dropout(tf.layers.separable_conv1d(layer_norm(x, name='ln1'), filters=self.filters, kernel_size=self.kernel_size, padding='SAME', name='conv{}'.format(j + 1)), self.keep_prob), 
+                                x=outputs, fn=fn, 
                                 keep_prob=1 - (j + 1) / self.num_layers * (1 - self.keep_prob))
-                    outputs = tf.nn.dropout(outputs + multihead_self_attention(layer_norm(outputs, name='ln2'), masks, self.num_heads), self.keep_prob)
+                    outputs = tf.nn.dropout(outputs + multihead_self_attention(layer_norm(outputs, name='ln2_{}'.format(i)), masks, self.num_heads), self.keep_prob)
                     res = outputs
-                    outputs = layer_norm(outputs, name='ln3')
+                    outputs = layer_norm(outputs, name='ln3_{}'.format(i + 1))
                     #outputs = tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1, padding='SAME', kernel_initializer=initializer_relu(), name='ffn1')
                     outputs = tf.nn.relu(tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1,  padding='SAME', kernel_initializer=initializer_relu(), name='ffn1'))
                     outputs = tf.layers.conv1d(outputs, filters=self.filters, kernel_size=1, padding='SAME', name='ffn2')

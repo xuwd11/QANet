@@ -70,11 +70,11 @@ tf.app.flags.DEFINE_integer("char_kernel_size", 5, "The kernel size of character
 # Hyperparameters for QANet
 tf.app.flags.DEFINE_integer("emb_num_blocks", 1, "Number of blocks in embedding encoder blocks")
 tf.app.flags.DEFINE_integer("emb_num_layers", 4, "Number of separable convolutional layers in embedding encoder blocks")
-tf.app.flags.DEFINE_integer("emb_num_heads", 4, "Number of heads in embedding encoder blocks")
+tf.app.flags.DEFINE_integer("emb_num_heads", 8, "Number of heads in embedding encoder blocks")
 tf.app.flags.DEFINE_integer("emb_kernel_size", 7, "Kernel size of separable convolutional layers in embedding encoder blocks")
-tf.app.flags.DEFINE_integer("model_num_blocks", 3, "Number of blocks in model encoder blocks")
+tf.app.flags.DEFINE_integer("model_num_blocks", 7, "Number of blocks in model encoder blocks")
 tf.app.flags.DEFINE_integer("model_num_layers", 2, "Number of separable convolutional layers in model encoder blocks")
-tf.app.flags.DEFINE_integer("model_num_heads", 4, "Number of heads in model encoder blocks")
+tf.app.flags.DEFINE_integer("model_num_heads", 8, "Number of heads in model encoder blocks")
 tf.app.flags.DEFINE_integer("model_kernel_size", 5, "Kernel size of separable convolutional layers in model encoder blocks")
 
 

@@ -70,9 +70,9 @@ class QAModel(object):
         # Define optimizer and updates
         # (updates is what you need to fetch in session.run to do a gradient update)
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
-        #lr = tf.minimum(FLAGS.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(self.global_step, tf.float32) + 1))
-        lr = FLAGS.learning_rate
-        opt = tf.train.AdamOptimizer(learning_rate=lr) # you can try other optimizers
+        lr = tf.minimum(FLAGS.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(self.global_step, tf.float32) + 1))
+        #lr = FLAGS.learning_rate
+        opt = tf.train.AdamOptimizer(learning_rate=lr, beta1=0.8, beta2=0.999, epsilon=1e-7) 
         self.updates = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
 
         # Define savers (for checkpointing) and summaries (for tensorboard)
@@ -139,11 +139,11 @@ class QAModel(object):
                 self.qn_char_embs = tf.nn.embedding_lookup(char_embedding_matrix, self.qn_char_ids)
                 # shape (batch_size, question_len, word_len, char_embedding_size)
                 if self.FLAGS.char_kernel_size > 0:
-                    self.context_char_embs = tf.layers.separable_conv2d(
+                    self.context_char_embs = tf.layers.conv2d(
                         self.context_char_embs, filters=self.FLAGS.embedding_size, 
                         kernel_size=[self.FLAGS.char_kernel_size, 1],
                         padding='SAME', name='char_conv')
-                    self.qn_char_embs = tf.layers.separable_conv2d(
+                    self.qn_char_embs = tf.layers.conv2d(
                         self.qn_char_embs, filters=self.FLAGS.embedding_size, 
                         kernel_size=[self.FLAGS.char_kernel_size, 1],
                         padding='SAME', name='char_conv')
