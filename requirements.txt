@@ -1,0 +1,6 @@
+colorama==0.3.9
+nltk==3.2.5
+numpy==1.14.2
+six==1.11.0
+tensor2tensor==1.8.0
+tqdm==4.24.0
