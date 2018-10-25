@@ -1,6 +1,6 @@
 # QANet
 
-A TensorFlow implementation of Google's [QANet](https://openreview.net/pdf?id=B14TlG-RW). The starter code is from [this repo](https://github.com/abisee/cs224n-win18-squad).
+A TensorFlow implementation of Google's [QANet](https://openreview.net/pdf?id=B14TlG-RW). The starter code is from [this repo](https://github.com/abisee/cs224n-win18-squad). Contributions are welcome!
 
 <p align="center"> 
 <img src="qanet.png" width=600>
