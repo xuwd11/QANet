@@ -3,7 +3,7 @@
 A TensorFlow implementation of Google's [QANet](https://openreview.net/pdf?id=B14TlG-RW). The starter code is from [this repo](https://github.com/abisee/cs224n-win18-squad).
 
 <p align="center"> 
-<img src="qanet.png">
+<img src="qanet.png" width=600>
 </p>
 
 ## Requirements
@@ -39,7 +39,7 @@ To start training, run (please replace `<EXPERIMENT NAME>` by an experiment name
 python main.py --experiment_name=<EXPERIMENT NAME> --mode=train
 ```
 
-Hyperparameters are stored as flags in `code/main.py`. Please refer to `code/modules.py` and `code/qa_model.py` for the details of options.
+Hyperparameters are stored as flags in `code/main.py`. Please refer to `code/modules.py` and `code/qa_model.py` for details.
 
 Training results would be stored under `experiments/<EXPERIMENT NAME>`.
 
@@ -69,4 +69,12 @@ To run the official SQuAD evaluation script on the output, run
 
 ```bash
 python evaluate.py ../data/dev-v1.1.json ../experiments/<EXPERIMENT NAME>/predictions.json
+```
+
+### Tensorboard
+
+To track progress in tensorboard, run
+
+```bash
+tensorboard --logdir=. --port=8888
 ```
